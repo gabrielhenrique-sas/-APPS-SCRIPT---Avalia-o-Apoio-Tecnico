@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root { --azul:#1F3864; --azul2:#2F5FA7; --linha:#E5E7EB; --fundo:#F3F4F6; --ok:#166534; --okbg:#DCFCE7; --erro:#B91C1C; --aviso:#92400E; --avbg:#FEF3C7; }
+* { box-sizing:border-box; }
+body { margin:0; font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#1F2937; background:var(--fundo); }
+header.topo { background:var(--azul); color:#fff; padding:12px 20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+header.topo h1 { font-size:18px; margin:0; }
+nav button { background:none; border:0; color:#fff; padding:7px 14px; border-radius:6px; cursor:pointer; font-size:14px; }
+nav button.ativa { background:rgba(255,255,255,.22); font-weight:700; }
+.badge { background:#F59E0B; color:#1F2937; border-radius:10px; padding:1px 7px; font-size:11px; font-weight:700; }
+main { max-width:1180px; margin:18px auto; padding:0 14px; }
+.card { background:#fff; border:1px solid var(--linha); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+h2 { font-size:16px; color:var(--azul); margin:0 0 10px; }
+button.b, a.b { background:var(--azul2); color:#fff; border:0; border-radius:6px; padding:8px 14px; cursor:pointer; font-size:13px; text-decoration:none; display:inline-block; }
+button.b.sec, a.b.sec { background:#fff; color:var(--azul2); border:1px solid var(--azul2); }
+button.b:disabled { opacity:.5; cursor:default; }
+input[type=text], input[type=date], input[type=email], input[type=number], select, textarea { width:100%; padding:7px 9px; border:1px solid #D1D5DB; border-radius:6px; font:inherit; }
+textarea { min-height:140px; resize:vertical; }
+label { font-size:12px; color:#6B7280; display:block; margin:8px 0 3px; }
+label.inline { display:inline-flex; align-items:center; gap:8px; margin:0; color:#1F2937; font-size:13px; }
+label.inline input { width:auto; }
+.msg { padding:10px 14px; border-radius:8px; margin-bottom:12px; font-size:13px; }
+.msg.erro { background:#FEE2E2; color:var(--erro); } .msg.ok { background:var(--okbg); color:var(--ok); } .msg.aviso { background:var(--avbg); color:var(--aviso); }
+.semana-barra { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.semana-titulo { font-size:22px; font-weight:700; color:var(--azul); background:#E8EEF8; border:2px solid var(--azul2); border-radius:8px; padding:8px 20px; text-align:center; }
+.semana-ir { display:flex; align-items:center; justify-content:center; gap:12px; flex-wrap:wrap; margin-top:14px; }
+.semana-ir input[type=date] { width:auto; }
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; font-size:11px; text-transform:uppercase; color:#6B7280; padding:8px 8px; border-bottom:1px solid var(--linha); }
+td { padding:9px 8px; border-bottom:1px solid var(--linha); vertical-align:middle; }
+tr.enviado td { background:#F0FDF4; }
+.tag { display:inline-block; font-size:11px; padding:2px 8px; border-radius:10px; background:#E5E7EB; color:#374151; font-weight:700; }
+.tag.ok { background:var(--okbg); color:var(--ok); } .tag.mod { background:#E0E7FF; color:#3730A3; } .tag.sem { background:#DBEAFE; color:#1E40AF; }
+.suave { color:#6B7280; font-size:12px; } .erro-t { color:var(--erro); font-size:12px; }
+.acoes { margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; }
+.grade { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:0 14px; }
+.checks { display:flex; gap:14px; flex-wrap:wrap; margin:4px 0 8px; }
+.revisar { border:1px solid var(--linha); border-left:4px solid #F59E0B; border-radius:6px; padding:12px 14px; margin-bottom:12px; }
+.fundo { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:flex-start; justify-content:center; overflow:auto; padding:24px 10px; z-index:10; }
+.fundo.aberto { display:flex; }
+.modal { background:#fff; border-radius:10px; padding:18px 20px; width:100%; max-width:900px; }
+iframe { width:100%; height:420px; border:1px solid var(--linha); border-radius:6px; }
+.switch { color:#1F2937; display:flex; align-items:center; gap:10px; font-size:15px; font-weight:700; }
+.switch input { width:20px; height:20px; }
+.carregando { color:#6B7280; padding:24px; text-align:center; }
+</style>
+</head>
+<body>
+<header class="topo">
+  <h1>Relatórios de Avaliação do Apoio Técnico</h1>
+  <nav>
+    <button id="nav-semana" class="ativa" onclick="aba('semana')">Semana</button>
+    <button id="nav-revisao" onclick="aba('revisao')">Revisão <span id="badge" class="badge" style="display:none"></span></button>
+    <button id="nav-auto" onclick="aba('auto')">Automático <span id="badge-auto" class="badge" style="display:none">ligado</span></button>
+  </nav>
+</header>
+<main>
+  <div id="msgs"></div>
+  <section id="aba-semana"></section>
+  <section id="aba-revisao" style="display:none"></section>
+  <section id="aba-auto" style="display:none"></section>
+</main>
+
+<div id="fundo" class="fundo"><div class="modal" id="modal"></div></div>
+
+<script>
+let semana = null, dadosSemana = null, rascunho = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const fmt = iso => iso ? iso.slice(8,10) + '/' + iso.slice(5,7) + '/' + iso.slice(0,4) : '';
+function somar(iso, n) { const p = iso.split('-').map(Number); const d = new Date(Date.UTC(p[0], p[1]-1, p[2]+n)); return d.toISOString().slice(0,10); }
+function chamar(fn, ...args) {
+  return new Promise((ok, falha) => google.script.run.withSuccessHandler(r => r && r.ok === false ? falha(new Error(r.erro)) : ok(r ? r.dados : r))
+    .withFailureHandler(e => falha(new Error(e && e.message ? e.message : e)))[fn](...args));
+}
+function msg(tipo, texto, fixo) { const d = document.createElement('div'); d.className = 'msg ' + tipo; d.innerHTML = texto; $('msgs').appendChild(d); if (!fixo) setTimeout(() => d.remove(), 12000); return d; }
+function limparMsgs() { $('msgs').innerHTML = ''; }
+function aba(nome) {
+  ['semana','revisao','auto'].forEach(n => { $('aba-'+n).style.display = n === nome ? '' : 'none'; $('nav-'+n).classList.toggle('ativa', n === nome); });
+  if (nome === 'revisao') carregarRevisao(); if (nome === 'auto') carregarAuto(); if (nome === 'semana') carregarSemana(semana, false);
+}
+
+// ------------------------------------------------------------ SEMANA
+async function carregarSemana(ini, aceitar) {
+  limparMsgs();
+  $('aba-semana').innerHTML = '<div class="card carregando">Atualizando o calendário e as avaliações…</div>';
+  try { dadosSemana = await chamar('apiSemana', ini || null, !!aceitar); }
+  catch (e) { $('aba-semana').innerHTML = ''; msg('erro', esc(e.message), true); return; }
+  semana = dadosSemana.ini; desenharSemana(dadosSemana);
+}
+function desenharSemana(d) {
+  d.erros.forEach((e, i) => msg('erro', esc(e) + (d.abortado && i === 0 ? ' <a href="#" onclick="carregarSemana(semana,true);return false">Aceitar a leitura mesmo assim</a>' : ''), true));
+  if (d.mudancas.length) msg('ok', 'Calendário atualizado: ' + d.mudancas.map(m => esc(m.evento.toLowerCase() + (m.municipio ? ' ' + m.municipio : ''))).join(', ') + '.');
+  if (d.n_revisar_semana) msg('aviso', d.n_revisar_semana + ' atividade(s) desta semana aguardam revisão e ainda não aparecem na lista. <a href="#" onclick="aba(\'revisao\');return false">Abrir a revisão</a>', true);
+  marcarBadges(d.n_revisar);
+  const linhas = d.grupos.map(g => {
+    const env = g.status === 'Enviado', sem = g.status === 'Sem avaliações';
+    const cont = g.exatas === null ? '<span class="suave">—</span>' : '<b>' + g.exatas + '</b>' + (g.seguinte ? ' <span class="suave">(+' + g.seguinte + ' no dia seguinte)</span>' : '');
+    const situ = env ? '<span class="tag ok">✔ Enviado</span><div class="suave">' + esc(g.enviado_em) + ' · ' + esc(g.tipo_envio || '') + '</div>'
+      : sem ? '<span class="tag sem">Sem avaliações</span><div class="suave">verificado em ' + esc(g.enviado_em) + '</div>'
+      : '<span class="tag">Não enviado</span>' + (g.motivo ? '<div class="erro-t">' + esc(g.motivo) + '</div>' : '');
+    return '<tr class="' + (env ? 'enviado' : '') + '"><td><input type="checkbox" class="sel" value="' + esc(g.gkey) + '"></td>'
+      + '<td>' + fmt(g.data) + ' <span class="suave">' + esc(g.dia) + '</span></td><td>' + esc(g.municipio) + '</td>'
+      + '<td>' + g.modalidades.map(m => '<span class="tag mod">' + esc(m) + '</span>').join(' ') + '</td>'
+      + '<td>' + esc(g.gerencias.join(', ') || '-') + '</td><td>' + cont + '</td><td>' + situ + '</td>'
+      + '<td><label class="inline" title="Se marcado, o envio automático não envia esta atividade"><input type="checkbox" ' + (g.nao_auto ? 'checked ' : '') + 'onchange="naoAuto(\'' + esc(g.gkey).replace(/'/g, "\\'") + '\', this.checked)"> excluir</label></td>'
+      + '<td><button class="b ' + (env ? 'sec' : '') + '" onclick="preparar([\'' + esc(g.gkey).replace(/'/g, "\\'") + '\'])">' + (env ? 'Reenviar' : 'Preparar envio') + '</button></td></tr>';
+  }).join('');
+  $('aba-semana').innerHTML =
+    '<section class="card"><div class="semana-barra"><button class="b sec" onclick="carregarSemana(somar(semana,-7))">◀ Semana anterior</button>'
+    + '<div class="semana-titulo">Semana de ' + fmt(d.ini) + ' a ' + fmt(d.fim) + '</div>'
+    + '<button class="b sec" onclick="carregarSemana(somar(semana,7))">Próxima semana ▶</button></div>'
+    + '<div class="semana-ir"><label class="inline">Ir para a semana que contém <input type="date" id="irdata" value="' + d.ini + '" onchange="if(this.value)carregarSemana(this.value)"></label>'
+    + '<button class="b sec" onclick="carregarSemana(null)">Semana atual</button><button class="b" onclick="carregarSemana(semana)" title="Consulta de novo o calendário e as respostas do formulário">↻ Atualizar</button></div></section>'
+    + '<section class="card"><h2>Atividades da semana</h2>' + (d.grupos.length
+      ? '<div style="overflow-x:auto"><table><thead><tr><th></th><th>Data</th><th>Município</th><th>Modalidade</th><th>Gerências</th><th>Avaliações</th><th>Envio</th><th>Automático</th><th></th></tr></thead><tbody>' + linhas + '</tbody></table></div>'
+        + '<div class="acoes"><button class="b sec" onclick="prepararSelecionadas()">Preparar as selecionadas (um só relatório do município, uma seção por data)</button></div>'
+      : '<p class="suave">Nenhuma atividade de segunda a sexta nesta semana.</p>') + '</section>'
+    + '<p class="suave">' + (d.n_avisos ? d.n_avisos + ' aviso(s) na aba Revisão · ' : '') + (d.respostasOk ? 'Avaliações lidas do formulário.' : 'Avaliações indisponíveis agora.') + '</p>';
+}
+function marcarBadges(n) { $('badge').style.display = n ? '' : 'none'; $('badge').textContent = n; }
+async function naoAuto(gkey, valor) { try { await chamar('apiNaoAuto', [gkey], valor); } catch (e) { msg('erro', esc(e.message)); } }
+function prepararSelecionadas() { const k = [...document.querySelectorAll('.sel:checked')].map(c => c.value); if (!k.length) return msg('aviso', 'Marque ao menos uma atividade.'); preparar(k); }
+
+// ------------------------------------------------------------ ENVIO MANUAL
+async function preparar(gkeys) {
+  const b = msg('aviso', 'Gerando o relatório…', true);
+  try { rascunho = await chamar('apiPreparar', gkeys, null); } catch (e) { b.remove(); return msg('erro', esc(e.message)); }
+  b.remove(); abrirRascunho();
+}
+function abrirRascunho(aviso) {
+  const p = rascunho;
+  const cont = p.contagens.map(c => fmt(c.data) + ': <b>' + c.exatas + '</b>' + (c.seguinte ? ' (+' + c.seguinte + ' do dia seguinte)' : '')).join(' · ');
+  $('modal').innerHTML = '<h2>' + esc(p.municipio) + ' — Apoio Técnico de ' + p.datas.map(fmt).join(', ') + '</h2>'
+    + '<div class="suave">Modalidade: <b>' + esc(p.modalidades.join(' e ')) + '</b> · Gerências: ' + esc(p.gerencias.join(', ') || '-') + '</div>'
+    + '<div style="margin:6px 0">Avaliações — ' + cont + '</div>'
+    + (aviso ? '<div class="msg ok">' + esc(aviso) + '</div>' : '')
+    + p.avisos.map(a => '<div class="msg aviso">' + esc(a) + '</div>').join('')
+    + (p.total ? '<label class="inline"><input type="checkbox" id="inc" ' + (p.incluirSeguinte ? 'checked ' : '') + 'onchange="regerar()"> Incluir avaliações do dia seguinte (se o município não tiver outra atividade nesse dia)</label>'
+      + '<div style="margin:10px 0"><a class="b sec" href="' + esc(p.pdfUrl) + '" target="_blank">Abrir PDF</a></div>'
+      + '<iframe src="' + esc(p.pdfUrl.replace(/\/view.*$/, '/preview')) + '"></iframe>'
+      : '<div class="msg aviso">Nenhuma avaliação recebida. Se enviar, vai o aviso de "sem avaliações".</div>')
+    + '<div class="grade"><div><label>Para</label><input type="text" id="e-para" value="' + esc(p.para) + '"></div>'
+    + '<div><label>Cópia (CC)</label><input type="text" id="e-cc" value="' + esc(p.cc) + '"></div></div>'
+    + '<label>Cópia oculta (CCO) — gerências</label><input type="text" id="e-cco" value="' + esc(p.cco) + '">'
+    + '<label>Assunto</label><input type="text" id="e-assunto" value="' + esc(p.assunto) + '">'
+    + '<label>Mensagem</label><textarea id="e-corpo">' + esc(p.corpo) + '</textarea>'
+    + '<div class="suave" style="margin-top:6px">Remetente: ' + esc(p.remetente) + ' (se não estiver cadastrado em "Enviar e-mail como" no Gmail, o envio sai pela conta que hospeda o sistema).</div>'
+    + '<div class="acoes"><button class="b" id="btn-env" onclick="enviar()">Enviar e-mail</button><button class="b sec" onclick="salvarRascunho()">Criar rascunho no Gmail</button><button class="b sec" onclick="fechar()">Fechar</button></div>';
+  $('fundo').classList.add('aberto');
+}
+function lerCampos() { ['para','cc','cco','assunto','corpo'].forEach(k => rascunho[k] = $('e-' + k).value); }
+function fechar() { $('fundo').classList.remove('aberto'); }
+async function regerar() {
+  lerCampos(); const inc = $('inc').checked;
+  try { rascunho = await chamar('apiRegerar', rascunho, inc); abrirRascunho('Relatório atualizado.'); } catch (e) { msg('erro', esc(e.message)); }
+}
+async function enviar() {
+  lerCampos();
+  if (!confirm('Enviar o e-mail agora?')) return;
+  $('btn-env').disabled = true;
+  try {
+    const r = await chamar('apiEnviar', rascunho); fechar();
+    msg('ok', 'E-mail enviado' + (r.usado ? ' por ' + esc(r.usado) : '') + '.' + (r.aviso ? ' ' + esc(r.aviso) : ''), true);
+    carregarSemana(semana);
+  } catch (e) { $('btn-env').disabled = false; msg('erro', esc(e.message), true); }
+}
+async function salvarRascunho() { lerCampos(); try { await chamar('apiRascunho', rascunho); msg('ok', 'Rascunho criado no seu Gmail.'); } catch (e) { msg('erro', esc(e.message)); } }
+
+// ------------------------------------------------------------ REVISÃO
+async function carregarRevisao() {
+  limparMsgs(); $('aba-revisao').innerHTML = '<div class="card carregando">Carregando…</div>';
+  let d; try { d = await chamar('apiRevisao'); } catch (e) { $('aba-revisao').innerHTML = ''; return msg('erro', esc(e.message), true); }
+  marcarBadges(d.itens.length);
+  const itens = d.itens.map((a, i) => '<div class="revisar" id="rev-' + i + '"><div class="suave"><b>Observação do calendário:</b> ' + esc(a.obs || '-') + ' · <b>Origem:</b> ' + esc(a.origem) + ' · <b>Processo:</b> ' + esc(a.proc || '-') + '</div>'
+    + '<div class="grade"><div><label>Data</label><input type="date" class="r-data" value="' + a.data + '"></div>'
+    + '<div><label>Município</label><input type="text" class="r-mun" list="lista-mun" value="' + esc(a.mun) + '"></div>'
+    + '<div><label>Modalidade</label><select class="r-mod">' + d.modalidades.map(m => '<option' + (m === a.modalidade ? ' selected' : '') + '>' + m + '</option>').join('') + '</select></div></div>'
+    + '<label>Gerências</label><div class="checks">' + d.gerencias.map(g => '<label class="inline"><input type="checkbox" class="r-ger" value="' + g + '"' + (a.ger.indexOf(g) >= 0 ? ' checked' : '') + '> ' + g + '</label>').join('') + '</div>'
+    + '<button class="b" onclick="confirmarItem(' + i + ',\'' + esc(a.chave).replace(/'/g, "\\'") + '\')">Confirmar</button></div>').join('');
+  const av = d.avisos.map(i => '<tr><td>' + esc(i.tipo) + '</td><td>' + esc(i.municipio) + '</td><td>' + esc(i.data) + '</td><td>' + esc(i.detalhe) + '</td></tr>').join('');
+  $('aba-revisao').innerHTML = '<datalist id="lista-mun">' + d.municipios.map(m => '<option value="' + esc(m) + '">').join('') + '</datalist>'
+    + '<section class="card"><h2>Atividades para revisar</h2><p class="suave">Vieram do calendário sem município reconhecido ou sem gerência válida. Corrija e confirme: só então entram na lista da semana. A correção vale enquanto o texto da célula no calendário não mudar.</p>'
+    + (itens || '<p class="suave">Nada para revisar.</p>') + '</section>'
+    + '<section class="card"><h2>Avisos' + (d.semanaAvisos ? ' da semana de ' + esc(d.semanaAvisos) : '') + '</h2><p class="suave">Somente leitura; atualizados cada vez que a aba Semana é aberta.</p>'
+    + (av ? '<div style="overflow-x:auto"><table><thead><tr><th>Tipo</th><th>Município</th><th>Data</th><th>Detalhe</th></tr></thead><tbody>' + av + '</tbody></table></div>' : '<p class="suave">Nenhum aviso.</p>') + '</section>';
+}
+async function confirmarItem(i, chave) {
+  const r = $('rev-' + i), f = { chave, data: r.querySelector('.r-data').value, municipio: r.querySelector('.r-mun').value, modalidade: r.querySelector('.r-mod').value,
+    gerencias: [...r.querySelectorAll('.r-ger:checked')].map(c => c.value) };
+  try { await chamar('apiConfirmar', f); await carregarRevisao(); msg('ok', 'Atividade confirmada: já aparece na lista da semana.'); } catch (e) { msg('erro', esc(e.message)); }
+}
+
+// ------------------------------------------------------------ AUTOMÁTICO
+const ROTULO = { enviada: 'Enviado', teste: 'Teste enviado', enviaria: 'Enviaria', sem_avaliacoes: 'Sem avaliações', ignorada: 'Ignorada', nao_enviada: 'Não enviado', falha: 'Falha', ja_enviada: 'Já enviada' };
+async function carregarAuto() {
+  limparMsgs(); $('aba-auto').innerHTML = '<div class="card carregando">Carregando…</div>';
+  let s; try { s = await chamar('apiAutomatico'); } catch (e) { $('aba-auto').innerHTML = ''; return msg('erro', esc(e.message), true); }
+  $('badge-auto').style.display = s.ativo ? '' : 'none';
+  const inconsistente = s.ativo && !s.gatilhos ? '<div class="msg erro">Está marcado como ligado, mas o gatilho não existe. Clique em Salvar para recriá-lo.</div>' : (!s.ativo && s.gatilhos ? '<div class="msg erro">Está desligado, mas ainda existe um gatilho. Clique em Salvar para removê-lo.</div>' : '');
+  $('aba-auto').innerHTML = '<section class="card"><h2>Envio automático</h2>' + inconsistente
+    + '<p class="suave">Roda de segunda a sexta, por volta do horário abaixo (o Google pode atrasar uns 15 minutos), e trata as atividades do <b>dia útil anterior</b> (na segunda, as de sexta). '
+    + 'Envia só se a atividade não estiver em revisão, não estiver marcada como "excluir", ainda não tiver sido enviada e tiver ao menos 1 avaliação. Sem avaliações: nada é enviado, só fica registrado no painel.</p>'
+    + '<label class="switch"><input type="checkbox" id="a-ativo" ' + (s.ativo ? 'checked' : '') + '> Envio automático ligado</label>'
+    + '<div class="grade"><div><label>Hora (0–23)</label><input type="number" id="a-hora" min="0" max="23" value="' + s.hora + '"></div><div><label>Minuto aproximado (0–59)</label><input type="number" id="a-min" min="0" max="59" value="' + s.minuto + '"></div></div>'
+    + '<label class="inline" style="margin-top:12px"><input type="checkbox" id="a-teste" ' + (s.teste ? 'checked' : '') + '> Modo teste (envia SÓ para o e-mail abaixo, com assunto [TESTE], e não marca nada como enviado)</label>'
+    + '<label>E-mail do teste (vazio = a conta que hospeda o sistema)</label><input type="text" id="a-email" value="' + esc(s.emailTeste) + '">'
+    + '<div class="acoes"><button class="b" onclick="salvarAuto()">Salvar</button></div>'
+    + '<p class="suave">Envio real: Para <b>' + esc(s.para) + '</b>, com as gerências em CCO. ' + (s.teste ? '<b>Modo teste ligado: nada vai para as gerências.</b>' : '<b>Modo teste desligado: os e-mails irão para as gerências.</b>') + '</p>'
+    + '<div class="msg ' + (s.remetente.disponivel ? 'ok' : 'aviso') + '">Remetente: ' + esc(s.remetente.texto) + '</div></section>'
+    + '<section class="card"><h2>Testar agora</h2><p class="suave">Atividades do dia útil anterior a hoje: <b>' + fmt(s.alvoHoje) + '</b>.</p>'
+    + '<div class="acoes"><button class="b sec" onclick="simular()">Simular (não envia nada)</button><button class="b" onclick="executarAgora()">Executar agora</button></div><div id="resultado-auto"></div></section>'
+    + '<section class="card"><h2>Última execução</h2>' + (s.ultima ? tabelaExec(s.ultima) : '<p class="suave">Ainda não houve execução.</p>') + '</section>';
+}
+function tabelaExec(r) {
+  const it = (r.itens || []).map(i => '<tr><td>' + esc(i.municipio) + '</td><td>' + esc(ROTULO[i.decisao] || i.decisao) + '</td><td>' + esc(i.total === undefined ? '' : i.total) + '</td><td>' + esc(i.motivo || '') + '</td></tr>').join('');
+  return '<p class="suave">' + esc(r.quando || '') + (r.alvo ? ' · atividades de ' + fmt(r.alvo) : '') + (r.teste ? ' · <b>modo teste</b>' : '') + (r.simular ? ' · <b>simulação</b>' : '') + '</p>'
+    + (r.erros || []).map(e => '<div class="msg erro">' + esc(e) + '</div>').join('')
+    + (it ? '<table><thead><tr><th>Município</th><th>Resultado</th><th>Avaliações</th><th>Observação</th></tr></thead><tbody>' + it + '</tbody></table>' : '<p class="suave">Nenhuma atividade tratada.</p>');
+}
+async function salvarAuto() {
+  const p = { ativo: $('a-ativo').checked, hora: $('a-hora').value, minuto: $('a-min').value, teste: $('a-teste').checked, emailTeste: $('a-email').value };
+  if (p.ativo && !p.teste && !confirm('O MODO TESTE está desligado: os e-mails automáticos irão para as gerências. Continuar?')) return;
+  try { await chamar('apiDefinirAutomatico', p); msg('ok', p.ativo ? 'Automático ligado.' : 'Automático desligado.'); carregarAuto(); } catch (e) { msg('erro', esc(e.message)); }
+}
+async function simular() { $('resultado-auto').innerHTML = '<p class="suave">Simulando…</p>'; try { $('resultado-auto').innerHTML = tabelaExec(await chamar('apiSimular')); } catch (e) { $('resultado-auto').innerHTML = ''; msg('erro', esc(e.message)); } }
+async function executarAgora() {
+  if (!confirm('Executar o automático agora? (Segue o modo teste: se estiver desligado, envia de verdade às gerências.)')) return;
+  $('resultado-auto').innerHTML = '<p class="suave">Executando…</p>';
+  try { $('resultado-auto').innerHTML = tabelaExec(await chamar('apiExecutarAgora')); } catch (e) { $('resultado-auto').innerHTML = ''; msg('erro', esc(e.message)); }
+}
+
+carregarSemana(null);
+(async () => { try { const s = await chamar('apiAutomatico'); $('badge-auto').style.display = s.ativo ? '' : 'none'; } catch (e) { /* ignora */ } })();
+</script>
+</body>
+</html>
