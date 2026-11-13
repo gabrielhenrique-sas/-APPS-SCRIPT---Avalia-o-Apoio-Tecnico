@@ -28,8 +28,9 @@ Tudo roda na conta Google de quem instala, vinculado a uma **planilha de control
 
 - **Lê o calendário online** (Google Planilhas) e extrai os ATMs (Apoios Técnicos) da semana: município, data, modalidade (Presencial/Remoto), gerências e nº do processo.
 - **Lê as respostas do formulário** de avaliação (Google Forms/Planilhas) e associa cada resposta à atividade correta, por **município + data**.
-- **Gera o relatório em PDF** a partir de um **Google Docs modelo** (com timbrado), com gráficos por setor e por pergunta e tabelas de comentários.
-- **Envia por e-mail** com o PDF anexado, as gerências em cópia oculta (CCO).
+- **Lê também as Oficinas** do calendário (faixa **AÇÕES**, texto começando com `Oficina:`), com o nome da oficina, o município e as gerências.
+- **Gera um relatório por gerência participante** (em PDF **e em Word**) a partir de um **Google Docs modelo** (um para ATM e outro para Oficina), com gráficos por setor e por pergunta e tabelas de comentários. Cada avaliação vai para a gerência da sua Unidade/Setor (aba **Unidades x Gerências**).
+- **Envia um e-mail por gerência** por atividade, com o PDF daquela gerência anexado e os e-mails da gerência em CCO. O Word fica no Drive, para edição manual.
 - Oferece uma **página web** (semana de segunda a sexta) com o status de cada envio, um painel de **revisão** de dados do calendário e o controle do **envio automático** (liga/desliga).
 
 ## Como funciona
@@ -47,8 +48,8 @@ flowchart LR
 ```
 
 1. **Sincronização.** Ao abrir ou recarregar a página (ou clicar em **↻ Atualizar**), o sistema consulta o calendário e as respostas. Os ATMs da semana (segunda a sexta) são gravados na aba **Atividades** da planilha de controle. Mudanças (novo, alterado, removido) ficam registradas na aba **Mudanças do calendário**.
-2. **Casamento das avaliações.** Para cada atividade, contam-se as respostas do mesmo município na mesma data. Opcionalmente entram também as respostas do **dia seguinte**, desde que o município não tenha outra atividade nesse dia; a tela mostra essa contagem separada, por exemplo `10 (+2 no dia seguinte)`.
-3. **Relatório.** O sistema copia o Docs modelo, troca os marcadores (`{{MUNICIPIO}}`, `{{DATAS}}`...), insere gráficos e tabelas no lugar de `{{CONTEUDO}}`, exporta para PDF e salva na pasta *Relatórios ATM - PDFs* do Drive.
+2. **Casamento das avaliações.** Para cada atividade, contam-se as respostas do mesmo município na mesma data. Opcionalmente entram também as respostas do **dia seguinte**, desde que o município não tenha outra atividade nesse dia; a tela mostra o total somado, sem separar por dia, por exemplo um único número somado (ex.: `12`).
+3. **Relatório.** Para cada gerência participante, o sistema copia o Docs modelo, troca os marcadores (`{{MUNICIPIO}}`, `{{DATAS}}`, `{{OFICINA}}`...), insere gráficos e tabelas no lugar de `{{CONTEUDO}}` e exporta **PDF e Word**. Os arquivos ficam em uma **subpasta por atividade** (`aaaa-mm-dd - Município`) dentro de *Relatórios ATM - PDFs* no Drive; o link da pasta aparece na tela e na planilha.
 4. **Envio.** Manual (você revisa e edita o e-mail na página) ou automático (gatilho diário).
 
 ### Regras de negócio
@@ -57,9 +58,11 @@ flowchart LR
 |---|---|
 | Semana | Apenas **segunda a sexta**. ATM em sábado/domingo é ignorado e gera um aviso. |
 | Atividade | Mesmo município no mesmo dia = **uma só atividade** (gerências e modalidades são unidas). |
-| Gerências aceitas | `GEBEN, GEPSB, GEPMC, GEFEAS, VSA, CAD, GETEP, GEPAC`. Apelidos tratados: `GFEAS→GEFEAS`, `GEPBS→GEPSB`; `GVINF` vira `CAD` e `VSA`. |
+| Gerências aceitas | `GEBEN, GEPSB, GEPMC, GEFEAS, VSA, CAD, GETEP, GEPAC`. Apelidos tratados: `GFEAS→GEFEAS`, `GEFAS→GEFEAS`, `GEPBS→GEPSB`; `GVINF` vira `CAD` e `VSA`. |
 | Municípios | Lista oficial dos 185 municípios de Pernambuco; grafias próximas são corrigidas (ex.: "Garanhus" → "Garanhuns"). |
 | Revisão | ATM sem município reconhecido ou sem gerência válida **não entra na lista** até você corrigir e confirmar. |
+| ATM x Oficina | ATM = município + data. Oficina = município + data + nome. Como o formulário é o mesmo, se um município tiver duas atividades no mesmo dia, as avaliações entram nas duas e a aba Revisão avisa. |
+| Gerência da avaliação | Pela **Unidade/Setor** da resposta e a aba **Unidades x Gerências**: vai para a gerência **primária** se ela participou da atividade; senão para a **secundária**, se participou; senão (nenhuma das duas participou, ou unidade fora da tabela) para **todas** as gerências participantes. |
 | Dia seguinte | Respostas datadas do dia seguinte entram se o município não tiver outra atividade nesse dia (configurável). |
 | Proteção | Se a leitura do calendário vier vazia ou com menos da metade dos ATMs já cadastrados na semana, **nada é alterado** e a página avisa (com opção de aceitar mesmo assim). |
 
@@ -140,7 +143,7 @@ Salve (Ctrl+S).
 2. Aceite as permissões. Se aparecer *"O Google não verificou este app"*, clique em **Avançado > Acessar (não seguro)**: é o seu próprio script.
 3. Ao terminar, a planilha ganha as abas **Atividades, Gerências, Configurações, Log** e **Mudanças do calendário**. Isso confirma que o vínculo funcionou.
 
-Permissões solicitadas: Planilhas, Drive, Documentos, Gmail (enviar e ler aliases), gatilhos do script e serviço externo de gráficos.
+Permissões solicitadas: Planilhas, Drive, Documentos, Gmail (enviar e ler aliases), gatilhos do script, serviço externo de gráficos e **acesso a serviço externo** (usado para exportar o Word a partir do Google Docs).
 
 ### 6. Preencher a planilha de controle
 
@@ -185,7 +188,8 @@ Aba **Configurações** da planilha de controle (chaves criadas automaticamente 
 | `RESPOSTAS_GID` | GID da aba das respostas. | `0` |
 | `INCLUIR_DIA_SEGUINTE` | `Sim`: respostas do dia seguinte entram se o município não tiver outra atividade nele. | `Sim` |
 | `CAMPO_DATA_BUSCA` | `data_apoio` (pergunta da data) ou `carimbo` (data/hora do envio da resposta). | `data_apoio` |
-| `MODELO_RELATORIO` | Link ou ID do Google Docs modelo. Vazio = PDF simples. | *(preencher)* |
+| `MODELO_RELATORIO` | Link ou ID do Google Docs modelo do relatório de **ATM**. Vazio = PDF simples (sem Word). | *(preencher)* |
+| `MODELO_RELATORIO_OFICINA` | Link ou ID do Google Docs modelo do relatório de **Oficina**. | `1npMS_utFpPJauKD0wDMFrwFn9DFI09kBnM19EEw_HQk` |
 | `AUTOMATICO` | `Sim`/`Não`. Também se altera na página (aba Automático). | `Não` |
 | `HORA_AUTOMATICO` / `MINUTO_AUTOMATICO` | Horário aproximado do envio automático. | `17` / `0` |
 | `MODO_TESTE` | `Sim`: o automático envia só para `EMAIL_TESTE` e não marca nada como enviado. | `Sim` |
@@ -194,15 +198,17 @@ Aba **Configurações** da planilha de controle (chaves criadas automaticamente 
 | `NOME_REMETENTE` | Nome exibido como remetente. | `NATM` |
 | `EMAIL_PARA` | Destinatário fixo (campo *Para*); as gerências vão em CCO. | *(preencher)* |
 | `USUARIOS_PERMITIDOS` | E-mails (separados por vírgula) que podem usar a página. Vazio = todos do acesso configurado. | vazio |
-| `ASSUNTO_RELATORIO`, `CORPO_RELATORIO` | Texto do e-mail com relatório. Marcadores: `{{MUNICIPIO}}`, `{{DATA}}`. Vazio = padrão. | vazio |
+| `ASSUNTO_RELATORIO`, `CORPO_RELATORIO` (ATM) e `ASSUNTO_RELATORIO_OFICINA`, `CORPO_RELATORIO_OFICINA` | Texto do e-mail com relatório. Marcadores: `{{MUNICIPIO}}`, `{{DATA}}`, `{{GERENCIA}}` (e `{{OFICINA}}` nas oficinas). Vazio = padrão. | vazio |
 | `ASSUNTO_SEM_RESPOSTAS`, `CORPO_SEM_RESPOSTAS` | Aviso manual de "sem avaliações". Vazio = padrão. | vazio |
 
 ### Abas da planilha de controle
 
 | Aba | Conteúdo |
 |---|---|
-| **Atividades** | Um registro por ATM do calendário: data, município, modalidade, gerências, processo, observação, **Revisar**, **Não enviar automático**, **Status do envio** (`Enviado` / `Sem avaliações`), nº de avaliações, data/hora, **tipo do envio** (Manual/Automático), **motivo** quando o automático não enviou, link do PDF, situação no calendário e dados técnicos de sincronização. |
+| **Atividades** | Um registro por ATM ou Oficina do calendário (colunas **Tipo** e **Nome da oficina** no fim): data, município, modalidade, gerências, processo, observação, **Revisar**, **Não enviar automático**, **Status do envio** (`Enviado` / `Sem avaliações`), nº de avaliações, data/hora, **tipo do envio** (Manual/Automático), **motivo** quando o automático não enviou, link da pasta com PDF e Word (resumo; o detalhe por gerência fica na aba Envios por gerência), situação no calendário e dados técnicos de sincronização. |
 | **Gerências** | Nome, gerente, e-mail corporativo e se está ativa. |
+| **Unidades x Gerências** | Para cada Unidade/Setor do formulário (nome **idêntico** ao do formulário), a gerência primária e a secundária. Vem preenchida; pode ser editada à vontade. |
+| **Envios por gerência** | Uma linha por atividade + gerência: status (Enviado / Sem avaliações / Não enviado), nº de avaliações, data/hora, tipo, motivo e links do PDF e do Word. É daqui que a tela lê o andamento dos envios. |
 | **Configurações** | Tabela acima. |
 | **Log** | Um registro por envio: data/hora, origem (Manual/Automático/Teste), município, datas, nº de avaliações, destinatários, status, remetente usado, link do PDF e observação. |
 | **Mudanças do calendário** | Histórico de eventos: `NOVO`, `ALTERADO`, `REMOVIDO`, `REATIVADO`, `CONFIRMADO`. |
@@ -210,6 +216,8 @@ Aba **Configurações** da planilha de controle (chaves criadas automaticamente 
 ---
 
 ## Modelo do relatório (Google Docs)
+
+Há dois modelos: o do **ATM** (`MODELO_RELATORIO`) e o da **Oficina** (`MODELO_RELATORIO_OFICINA`, com `{{OFICINA}}`, `{{MUNICIPIO}}`, `{{DATAS}}`, `{{EMAIL}}` e `{{CONTEUDO}}`). Em cada relatório, `{{EMAIL}}`/`{{GERENCIAS}}` mostram **só a gerência daquele relatório**. O Word é a exportação do próprio Google Docs preenchido (gráficos viram imagens; a paginação pode diferir um pouco do PDF).
 
 O relatório é gerado a partir de um Google Docs que você controla (timbrado, fontes, textos fixos). A cada relatório o sistema **copia** o modelo, preenche e exporta para PDF; a cópia é apagada e só o PDF permanece.
 
@@ -249,10 +257,9 @@ Como a Docs não informa a altura real do conteúdo, a paginação usa **estimat
 ### Aba Semana
 
 - Mostra a semana de **segunda a sexta** com o intervalo em destaque. Use **◀ / ▶**, o seletor de data, **Semana atual** e **↻ Atualizar**.
-- Cada atividade traz **data, município, modalidade, gerências, quantidade de avaliações** e o **status de envio**: *Enviado* (verde, com data, hora e tipo), *Sem avaliações* (verificado pelo automático) ou *Não enviado* (com o motivo, se o automático não conseguiu enviar).
-- **Preparar envio / Reenviar**: gera o PDF, abre uma janela para você editar *Para, CC, CCO, assunto e mensagem*, conferir o PDF e **Enviar** (ou **Criar rascunho no Gmail**).
-- **Selecionar várias linhas** do mesmo município gera **um só relatório**, com uma seção por data.
-- **Excluir** (coluna *Automático*): impede que o envio automático envie aquela atividade.
+- Cada **atividade** (ATM ou Oficina) é um **bloco**: data, município, modalidade (ou nome da oficina), **total de avaliações** (número único), link da pasta com PDF e Word e a opção **excluir do automático**.
+- Dentro do bloco há **uma linha por gerência participante**, com o nº de avaliações dela e o **status de envio**: *Enviado* (verde, com data, hora e tipo), *Sem avaliações* ou *Não enviado* (com o motivo), além dos links do PDF e do Word.
+- **Preparar envio / Reenviar** (por gerência): gera o PDF e o Word, abre uma janela para você editar *Para, CC, CCO, assunto e mensagem*, conferir o PDF e **Enviar** (ou **Criar rascunho no Gmail**). O e-mail leva só o PDF; se editar o Word, anexe-o manualmente (rascunho do Gmail).
 
 ### Aba Revisão
 
@@ -263,22 +270,24 @@ Como a Docs não informa a altura real do conteúdo, a paginação usa **estimat
 
 ## Envio automático
 
-Na aba **Automático** você liga/desliga o envio e define o horário. O gatilho roda **de segunda a sexta**, por volta do horário configurado (o Google pode atrasar cerca de 15 minutos), e trata as atividades do **dia útil anterior** (na segunda-feira, as de sexta).
+Na aba **Automático** você liga/desliga o envio e define o horário. O gatilho roda **de segunda a sexta**, por volta do horário configurado (o Google pode atrasar cerca de 15 minutos), e trata as atividades (ATM e Oficinas) do **dia útil anterior** (na segunda-feira, as de sexta), **uma gerência por vez**.
 
-Uma atividade só é enviada automaticamente se:
+Um relatório é enviado automaticamente a uma gerência se:
 
 - não estiver **em revisão**;
 - não estiver marcada como **Excluir**;
-- ainda **não tiver sido enviada**;
-- tiver **ao menos 1 avaliação**;
-- ao menos uma de suas gerências tiver **e-mail válido**.
+- a gerência ainda **não tiver recebido** o relatório dessa atividade;
+- tiver **ao menos 1 avaliação atribuída**;
+- a gerência tiver **e-mail válido**.
+
+Cada envio é gravado na hora; se o tempo de execução (6 min) acabar, o que sobrar fica como *Não enviado* e o botão **Executar agora** continua de onde parou.
 
 Resultados possíveis, sempre visíveis na planilha e na página:
 
 | Situação | O que acontece |
 |---|---|
 | Enviada | Marcada como *Enviado* (tipo *Automático*), com o PDF no Drive e registro no Log. |
-| Sem avaliações | **Nenhum e-mail.** Marcada como *Sem avaliações* com a hora da verificação. |
+| Sem avaliações | **Nenhum e-mail.** A gerência fica como *Sem avaliações* com a hora da verificação. |
 | Não enviada (sem e-mail, revisão, falha) | Fica *Não enviado* e o **motivo** aparece na planilha e na página, para envio manual. |
 
 **Modo teste** (ligado por padrão): o automático envia **apenas** para `EMAIL_TESTE`, com assunto `[TESTE]`, e **não marca nada como enviado**. Os botões **Simular** (não envia nada) e **Executar agora** (segue o modo teste) servem para validar antes de ligar de verdade.

@@ -121,7 +121,7 @@ const LOGO_RODAPE_B64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAkGBwgHBgkIBwgKCgkLDRY
  *  - a atividade fica na 2ª coluna do bloco; o nº do processo na 1ª; a linha "Informes" (coluna D) encerra a área com datas
  */
 const GERENCIAS_VALIDAS = ['GEBEN', 'GEPSB', 'GEPMC', 'GEFEAS', 'VSA', 'CAD', 'GETEP', 'GEPAC'];
-const APELIDOS_GER = { GFEAS: 'GEFEAS', GEPBS: 'GEPSB' };     // erros de digitação conhecidos
+const APELIDOS_GER = { GFEAS: 'GEFEAS', GEFAS: 'GEFEAS', GEPBS: 'GEPSB' };     // erros de digitação conhecidos
 const GVINF_EXPANDE_PARA = ['CAD', 'VSA'];                    // GVINF vira CAD e VSA (exceto GVINF/CAD, GVINF/VSA)
 const MODALIDADES = ['Presencial', 'Remoto'];
 const LIMITE_SEMELHANCA = 0.84;                               // corrige grafias: "Garanhus" -> "Garanhuns"
@@ -265,6 +265,31 @@ function interpretar(texto) {
   return [mun, gerTxt.join(' '), obs.join('; ')];
 }
 
+/**
+ * Oficina: o texto da célula (na faixa AÇÕES) é
+ *   "Oficina: Nome da oficina" / "Município" / "GEPAC e GEPSB"   (município e gerências podem vir na mesma linha)
+ * Devolve [nome, município, gerências, observações].
+ */
+function interpretarOficina(texto) {
+  const linhas = String(texto).replace(/\r/g, '').split('\n').map(l => l.trim()).filter(l => l);
+  const i0 = linhas.findIndex(l => /^Oficina\s*:/i.test(l));
+  const obs = linhas.slice(0, Math.max(i0, 0)).map(l => stripChars(l, '()'));
+  const ls = linhas.slice(Math.max(i0, 0));
+  const nome = (ls[0] || '').replace(/^Oficina\s*:\s*/i, '').trim();
+  const resto = [];
+  ls.slice(1).forEach(l => {
+    if (/^CONFIRMA[ÇC][ÃA]O$/i.test(l)) obs.push('CONFIRMAÇÃO');
+    else if (/^\(.*\)$/.test(l) || /remarcad/i.test(l)) obs.push(stripChars(l, '()'));
+    else resto.push(l);
+  });
+  let mun = resto[0] || '';
+  const gerTxt = resto.slice(1);
+  const tk = reToken_('i').exec(mun);                             // gerência escrita na mesma linha do município
+  if (tk && tk.index > 0) { gerTxt.unshift(mun.slice(tk.index)); mun = mun.slice(0, tk.index); }
+  mun = stripChars(mun, ' -–/,;');
+  return [nome, mun, gerTxt.join(' '), obs.join('; ')];
+}
+
 // ---------------------------------------------------------------- extração
 /** vals = matriz de valores de uma aba. Devolve {linhas, avisos}. inicio/fim (ISO) limitam a janela. */
 function extrairDeMatriz(nomeAba, mes, vals, inicio, fim, ano) {
@@ -306,6 +331,21 @@ function extrairDeMatriz(nomeAba, mes, vals, inicio, fim, ano) {
           else if (s === 'AÇÕES' || s === 'AÇOES') faixa = null;
         }
         const v = cel(r, c + 1);
+        if (typeof v === 'string' && /^\s*Oficina\s*:/i.test(v)) {                          // oficinas ficam na faixa AÇÕES
+          const [nomeOf, munOf, gerOf, obsOf] = interpretarOficina(v);
+          const gerO = extrairGerencias(gerOf), resO = resolverMunicipios(munOf);
+          const revisarO = !resO.ok || !gerO || !nomeOf;
+          const extrasO = obsOf ? [obsOf] : [];
+          resO.obs.forEach(o => extrasO.push(o));
+          if (resO.pend.length) extrasO.push('trecho não reconhecido: ' + resO.pend.join(' / '));
+          if (revisarO) extrasO.push('texto original: ' + v.replace(/\s+/g, ' ').trim().slice(0, 90));
+          (resO.muns.length ? resO.muns : [munOf]).forEach(mun => {
+            linhas.push({ data, ger: gerO, modalidade: '', tipo: 'Oficina', oficina: nomeOf, proc: String(cel(r, c)).trim(), obs: extrasO.join('; '),
+                          mes: nomeAba, celula: letraColuna(c + 2) + (r + 1), revisar: revisarO ? 'SIM' : '', mun });
+          });
+          capturadas[r + ',' + (c + 1)] = true;
+          continue;
+        }
         if (!(typeof v === 'string' && /^\s*ATM/i.test(v)) || faixa === null) continue;   // só ATMs dentro das duas faixas
         const [munTxt, gerTxt, obs] = interpretar(v);
         const ger = extrairGerencias(gerTxt);
@@ -317,7 +357,7 @@ function extrairDeMatriz(nomeAba, mes, vals, inicio, fim, ano) {
         if (res.pend.length) extras.push('trecho não reconhecido: ' + res.pend.join(' / '));
         if (revisar) extras.push('texto original: ' + v.replace(/\s+/g, ' ').trim().slice(0, 90));
         (res.muns.length ? res.muns : [munTxt]).forEach(mun => {
-          linhas.push({ data, ger, modalidade: faixa, proc: String(proc).trim(), obs: extras.join('; '), mes: nomeAba,
+          linhas.push({ data, ger, modalidade: faixa, tipo: 'ATM', oficina: '', proc: String(proc).trim(), obs: extras.join('; '), mes: nomeAba,
                         celula: letraColuna(c + 2) + (r + 1), revisar: revisar ? 'SIM' : '', mun });
         });
         capturadas[r + ',' + (c + 1)] = true;
@@ -353,7 +393,7 @@ function extrairCalendario(lerAba, inicio, fim, ano) {
   });
   const cont = {};
   linhas.forEach(l => {                                                     // chave única: data | processo | município
-    const base = l.data + '|' + l.proc + '|' + norm(l.mun);
+    const base = l.data + '|' + (l.tipo === 'Oficina' ? 'OF-' + slug(l.oficina) : l.proc) + '|' + norm(l.mun);
     cont[base] = (cont[base] || 0) + 1;
     l.chave = cont[base] === 1 ? base : base + '#' + cont[base];
   });
@@ -362,14 +402,14 @@ function extrairCalendario(lerAba, inicio, fim, ano) {
 }
 
 // ---------------------------------------------------------------- sincronização com as atividades do CONTROLE
-const CAMPOS_SYNC = [['mun', 'Município'], ['ger', 'Gerências'], ['modalidade', 'Modalidade'], ['obs', 'Observação'], ['origem', 'Origem']];
+const CAMPOS_SYNC = [['mun', 'Município'], ['ger', 'Gerências'], ['modalidade', 'Modalidade'], ['tipo', 'Tipo'], ['oficina', 'Oficina'], ['obs', 'Observação'], ['origem', 'Origem']];
 const FRACAO_MINIMA = 0.5;     // leitura com menos que isso dos ATMs ativos da janela é tratada como suspeita
 
-function assinatura_(l) { return [l.mun, l.ger, l.modalidade, l.obs, l.revisar].join('|'); }
+function assinatura_(l) { return [l.mun, l.ger, l.modalidade, l.tipo || 'ATM', l.oficina || '', l.obs, l.revisar].join('|'); }
 function dataDaChave(a) { return /^\d{4}-\d{2}-\d{2}/.test(a.chave) ? a.chave.slice(0, 10) : a.data; }
 
 function novaAtividade(l, agora) {
-  return { data: l.data, mun: l.mun, modalidade: l.modalidade, ger: l.ger, proc: l.proc, obs: l.obs, revisar: l.revisar === 'SIM',
+  return { data: l.data, mun: l.mun, modalidade: l.modalidade, tipo: l.tipo || 'ATM', oficina: l.oficina || '', ger: l.ger, proc: l.proc, obs: l.obs, revisar: l.revisar === 'SIM',
            nao_auto: false, status: '', n: null, enviado_em: null, tipo_envio: '', motivo: '', link: '', situacao: 'Ativo',
            origem: l.mes + ' ' + l.celula, assinatura: assinatura_(l), manual: false, chave: l.chave, atualizado: agora };
 }
@@ -393,7 +433,7 @@ function mesclar(atividades, linhas, ini, fim, agora, forcar) {
       a = novaAtividade(l, agora);
       atividades.push(a);
       porChave[a.chave] = a;
-      ev.push(['NOVO', a.mun, a.data, `${a.ger} (${a.modalidade})`]);
+      ev.push(['NOVO', a.mun, a.data, a.tipo === 'Oficina' ? `Oficina: ${a.oficina} — ${a.ger}` : `${a.ger} (${a.modalidade})`]);
       return;
     }
     const reativado = a.situacao !== 'Ativo';
@@ -401,7 +441,7 @@ function mesclar(atividades, linhas, ini, fim, agora, forcar) {
     const nova = assinatura_(l);
     const difs = reativado ? ['voltou ao calendário'] : [];
     if (!(a.manual && a.assinatura === nova)) {                              // ajuste manual preservado se nada mudou
-      const novos = { mun: l.mun, ger: l.ger, modalidade: l.modalidade, obs: l.obs, origem: l.mes + ' ' + l.celula };
+      const novos = { mun: l.mun, ger: l.ger, modalidade: l.modalidade, tipo: l.tipo || 'ATM', oficina: l.oficina || '', obs: l.obs, origem: l.mes + ' ' + l.celula };
       CAMPOS_SYNC.forEach(([k, rotulo]) => {
         if (String(a[k] || '') !== novos[k]) { difs.push(`${rotulo}: "${a[k] || ''}" → "${novos[k]}"`); a[k] = novos[k]; }
       });
@@ -435,14 +475,43 @@ const COLUNAS = [   // [campo, título, largura]
   ['proc', 'Nº do processo', 14], ['obs', 'Observação', 40], ['revisar', 'Revisar', 9],
   ['nao_auto', 'Não enviar automático', 12], ['status', 'Status do envio', 15], ['n', 'Nº de avaliações', 11],
   ['enviado_em', 'Enviado/verificado em', 18], ['tipo_envio', 'Tipo do envio', 13], ['motivo', 'Motivo (automático)', 40],
-  ['link', 'Link do PDF', 30], ['situacao', 'Situação no calendário', 22], ['origem', 'Origem (aba/célula)', 18],
-  ['assinatura', 'Leitura do calendário', 20], ['manual', 'Ajuste manual', 10], ['chave', 'Chave', 30], ['atualizado', 'Atualizado em', 18]];
+  ['link', 'Link da pasta (PDF e Word)', 30], ['situacao', 'Situação no calendário', 22], ['origem', 'Origem (aba/célula)', 18],
+  ['assinatura', 'Leitura do calendário', 20], ['manual', 'Ajuste manual', 10], ['chave', 'Chave', 30], ['atualizado', 'Atualizado em', 18],
+  ['tipo', 'Tipo (ATM/Oficina)', 12], ['oficina', 'Nome da oficina', 34]];
 const SIM_NAO = ['revisar', 'nao_auto', 'manual'];
 const FORMATOS_COL = { data: 'dd/MM/yyyy', proc: '@', enviado_em: 'dd/MM/yyyy HH:mm', atualizado: 'dd/MM/yyyy HH:mm', n: '0' };
-const ENVIADO = 'Enviado', SEM_AVALIACOES = 'Sem avaliações';
+const ENVIADO = 'Enviado', SEM_AVALIACOES = 'Sem avaliações', PARCIAL = 'Parcial';
+
+/** Chave de uma atividade (ATM ou oficina): data|município[|nome da oficina]. Usada na tela e na aba Envios por gerência. */
+function gkeyDe_(a) { return a.data + '|' + a.mun + (a.tipo === 'Oficina' ? '|' + (a.oficina || '') : ''); }
+function partesGkey_(k) {
+  const p = String(k).split('|');
+  return { data: p[0], municipio: p[1], oficina: p.slice(2).join('|') };
+}
+const normGer_ = g => { const t = String(g || '').trim().toUpperCase(); return APELIDOS_GER[t] || t; };
+
+// ---- aba "Unidades x Gerências": de qual gerência é cada Unidade/Setor do formulário (pode ser editada na planilha)
+const ABA_UNIDADES = 'Unidades x Gerências';
+const UNIDADES_PADRAO = [   // [Unidade/Setor (igual ao formulário), Gerência primária, Gerência secundária]
+  ['Primeira Infância', 'GEPSB', 'GEPMC'], ['Cadastro Único', 'CAD', 'VSA'], ['Serviço de Acolhimento', 'GEPAC', 'GEPMC'],
+  ['CRAS', 'GEPSB', 'GEPMC'], ['Serviço de Convivência e Fortalecimento de Vínculos (SCFV)', 'GEPSB', 'GEPMC'], ['CREAS', 'GEPMC', 'GEPAC'],
+  ['Gestão Municipal (Secretários, Secretários Executivos, Gerentes e Assessores)', 'GEFEAS', 'VSA'],
+  ['Vigilância Socioassistencial', 'VSA', 'GETEP'], ['Benefício de Prestação Continuada na Escola (BPC na Escola)', 'GEBEN', 'GEPSB'],
+  ['Benefícios Eventuais', 'GEBEN', 'GEPSB'], ['ACESSUAS - Trabalho', 'GEPSB', 'GEPMC'], ['Programa Família Acolhedora', 'GEPAC', 'GEPMC'],
+  ['Gestão de Trabalho', 'GETEP', 'VSA'], ['Serviço de Abordagem Social (SAS)', 'GEPMC', 'GEPAC'],
+  ['Programa de Erradicação do Trabalho Infantil (PETI)', 'GEPMC', 'GEPAC'], ['Centro POP', 'GEPMC', 'GEPAC'],
+  ['Medida Socioeducativa (MSE)', 'GEPMC', 'GEPAC'], ['Programa Mães de Pernambuco', 'GEBEN', 'GEPSB'],
+  ['Benefício de Prestação Continuada (BPC)', 'GEBEN', 'GEPSB'], ['Serviço Família Acolhedora', 'GEPAC', 'GEPMC'],
+  ['Benefício Eventual Emergencial', 'GEBEN', 'GEPSB'], ['Cuidados em Família Extensa', 'GEPAC', 'GEPMC']];
+
+const COL_ENVIOS = [   // [campo, título, largura]  -- uma linha por atividade + gerência
+  ['gkey', 'Chave da atividade', 34], ['data', 'Data', 12], ['mun', 'Município', 26], ['tipo', 'Tipo', 10], ['oficina', 'Oficina', 30],
+  ['ger', 'Gerência', 12], ['status', 'Status', 15], ['n', 'Nº de avaliações', 11], ['enviado_em', 'Enviado/verificado em', 18],
+  ['tipo_envio', 'Tipo do envio', 14], ['motivo', 'Motivo', 40], ['pdf', 'Link do PDF', 30], ['docx', 'Link do Word', 30]];
+const FORMATOS_ENVIOS = { data: 'dd/MM/yyyy', enviado_em: 'dd/MM/yyyy HH:mm', n: '0' };
 
 const ABAS_EXTRAS = {
-  'Log': ['Execução', 'Origem', 'Município', 'Datas dos apoios', 'Nº de avaliações', 'Nº de destinatários', 'Status', 'Remetente usado', 'Link do PDF', 'Observação'],
+  'Log': ['Execução', 'Origem', 'Município', 'Datas dos apoios', 'Nº de avaliações', 'Nº de destinatários', 'Status', 'Remetente usado', 'Link do PDF', 'Observação', 'Gerência'],
   'Mudanças do calendário': ['Data/hora', 'Evento', 'Município', 'Data do ATM', 'Detalhe'],
 };
 const CALENDARIO_PADRAO = 'https://docs.google.com/spreadsheets/d/1U1yoaMT9x51nDpjt-i1mJFOacDv7bibond7A6hB3E3E/edit?usp=sharing';
@@ -454,6 +523,7 @@ const CONFIG_PADRAO = [   // [chave, valor, descrição]
   ['INCLUIR_DIA_SEGUINTE', 'Sim', 'Sim = respostas datadas do dia seguinte também entram, se o município não tiver outra atividade nesse dia.'],
   ['CAMPO_DATA_BUSCA', 'data_apoio', 'data_apoio (pergunta "data do apoio") ou carimbo (data/hora em que a resposta foi enviada).'],
   ['MODELO_RELATORIO', '11Eoo8_xnEu9rzsOFOJ7CgDkVaIw3Ik70G1POwD7Hd1A', 'Link ou ID do Google Docs usado como modelo do relatório (marcadores {{MUNICIPIO}}, {{DATAS}}, {{MODALIDADE}}, {{EMAIL}} ou {{GERENCIAS}}, {{CONTEUDO}}). Vazio = PDF simples.'],
+  ['MODELO_RELATORIO_OFICINA', '1npMS_utFpPJauKD0wDMFrwFn9DFI09kBnM19EEw_HQk', 'Link ou ID do Google Docs usado como modelo do relatório de OFICINA (marcadores {{OFICINA}}, {{MUNICIPIO}}, {{DATAS}}, {{EMAIL}} ou {{GERENCIAS}}, {{CONTEUDO}}). Vazio = PDF simples.'],
   ['AUTOMATICO', 'Não', 'Sim/Não. Também se liga e desliga na página (aba Automático).'],
   ['HORA_AUTOMATICO', '17', 'Hora do envio automático (0 a 23). O Google pode atrasar uns 15 minutos.'],
   ['MINUTO_AUTOMATICO', '0', 'Minuto aproximado do envio automático (0 a 59).'],
@@ -463,9 +533,11 @@ const CONFIG_PADRAO = [   // [chave, valor, descrição]
   ['NOME_REMETENTE', 'NATM', 'Nome que aparece como remetente.'],
   ['EMAIL_PARA', 'atm@sas.pe.gov.br', 'Destinatário fixo (campo Para). As gerências vão sempre em cópia oculta (CCO).'],
   ['USUARIOS_PERMITIDOS', '', 'Opcional: e-mails (separados por vírgula) que podem usar a página. Vazio = todo o domínio.'],
-  ['ASSUNTO_RELATORIO', '', 'Assunto do e-mail com relatório. Marcadores: {{MUNICIPIO}}, {{DATA}}. Vazio = padrão.'],
-  ['CORPO_RELATORIO', '', 'Texto do e-mail com relatório. Vazio = padrão.'],
-  ['ASSUNTO_SEM_RESPOSTAS', '', 'Assunto do aviso manual "sem avaliações". Vazio = padrão.'],
+  ['ASSUNTO_RELATORIO', '', 'Assunto do e-mail com relatório do ATM. Marcadores: {{MUNICIPIO}}, {{DATA}}, {{GERENCIA}}. Vazio = padrão.'],
+  ['CORPO_RELATORIO', '', 'Texto do e-mail com relatório do ATM. Mesmos marcadores. Vazio = padrão.'],
+  ['ASSUNTO_RELATORIO_OFICINA', '', 'Assunto do e-mail com relatório de oficina. Marcadores: {{OFICINA}}, {{MUNICIPIO}}, {{DATA}}, {{GERENCIA}}. Vazio = padrão.'],
+  ['CORPO_RELATORIO_OFICINA', '', 'Texto do e-mail com relatório de oficina. Mesmos marcadores. Vazio = padrão.'],
+  ['ASSUNTO_SEM_RESPOSTAS', '', 'Assunto do aviso manual "sem avaliações" (ATM). Vazio = padrão.'],
   ['CORPO_SEM_RESPOSTAS', '', 'Texto do aviso manual "sem avaliações". Vazio = padrão.'],
 ];
 
@@ -491,7 +563,13 @@ function garantirEstrutura() {
   if (!sh) {
     sh = ss.getSheets().length === 1 && !ss.getSheets()[0].getLastRow() ? ss.getSheets()[0].setName('Atividades') : ss.insertSheet('Atividades');
     estilizarCabecalho_(sh, COLUNAS.map(c => c[1]), COLUNAS.map(c => c[2]));
+  } else sincronizarCabecalho_(sh, COLUNAS.map(c => c[1]), COLUNAS.map(c => c[2]), true);
+  if (!ss.getSheetByName(ABA_UNIDADES)) {
+    const u = ss.insertSheet(ABA_UNIDADES);
+    estilizarCabecalho_(u, ['Unidade/Setor (igual ao formulário)', 'Gerência Primária', 'Gerência Secundária'], [70, 18, 18]);
+    u.getRange(2, 1, UNIDADES_PADRAO.length, 3).setNumberFormat('@').setValues(UNIDADES_PADRAO);
   }
+  if (!ss.getSheetByName('Envios por gerência')) estilizarCabecalho_(ss.insertSheet('Envios por gerência'), COL_ENVIOS.map(c => c[1]), COL_ENVIOS.map(c => c[2]));
   if (!ss.getSheetByName('Gerências')) {
     const g = ss.insertSheet('Gerências');
     estilizarCabecalho_(g, ['Gerência', 'Gerente', 'E-mail corporativo', 'Ativa'], [16, 22, 40, 8]);
@@ -507,8 +585,18 @@ function garantirEstrutura() {
     cf.getRange(ini, 1, faltam.length, 3).setValues(faltam);
   }
   Object.keys(ABAS_EXTRAS).forEach(nome => {
-    if (!ss.getSheetByName(nome)) estilizarCabecalho_(ss.insertSheet(nome), ABAS_EXTRAS[nome], [18, 14, 28, 22, 13, 13, 14, 26, 40, 60]);
+    const larg = [18, 14, 28, 22, 13, 13, 14, 26, 40, 60, 12];
+    if (!ss.getSheetByName(nome)) estilizarCabecalho_(ss.insertSheet(nome), ABAS_EXTRAS[nome], larg);
+    else sincronizarCabecalho_(ss.getSheetByName(nome), ABAS_EXTRAS[nome], larg, false);
   });
+}
+
+/** Garante que o cabeçalho tenha todas as colunas (planilhas criadas por versões anteriores ganham as novas no fim). */
+function sincronizarCabecalho_(sh, titulos, larguras, sobrescrever) {
+  const atual = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), titulos.length)).getValues()[0];
+  let mudou = false;
+  const novo = titulos.map((t, i) => { const v = String(atual[i] || ''); if (!v || (sobrescrever && v !== t)) { mudou = true; return t; } return v; });
+  if (mudou) estilizarCabecalho_(sh, novo, larguras);
 }
 
 function textoCel_(v) { return v === null || v === undefined ? '' : String(v).trim(); }
@@ -516,7 +604,7 @@ function textoCel_(v) { return v === null || v === undefined ? '' : String(v).tr
 function lerControle() {
   garantirEstrutura();
   const ss = planilhaControle();
-  const ctrl = { atividades: [], gerencias: {}, config: {} };
+  const ctrl = { atividades: [], gerencias: {}, config: {}, envios: {}, unidades: {}, avisosUnidades: [] };
   const campos = COLUNAS.map(c => c[0]);
   const dados = ss.getSheetByName('Atividades').getDataRange().getValues();
   for (let i = 1; i < dados.length; i++) {
@@ -525,7 +613,8 @@ function lerControle() {
     a.data = paraIso(a.data, TZ);
     if (!a.data || !textoCel_(a.mun)) continue;
     SIM_NAO.forEach(k => { a[k] = norm(a[k]) === 'sim'; });
-    ['mun', 'modalidade', 'ger', 'proc', 'obs', 'status', 'tipo_envio', 'motivo', 'link', 'situacao', 'origem', 'assinatura', 'chave'].forEach(k => { a[k] = textoCel_(a[k]); });
+    ['mun', 'modalidade', 'ger', 'proc', 'obs', 'status', 'tipo_envio', 'motivo', 'link', 'situacao', 'origem', 'assinatura', 'chave', 'tipo', 'oficina'].forEach(k => { a[k] = textoCel_(a[k]); });
+    a.tipo = a.tipo === 'Oficina' ? 'Oficina' : 'ATM';
     a.situacao = a.situacao || 'Ativo';
     a.n = a.n === '' || a.n === null || isNaN(Number(a.n)) ? null : Number(a.n);
     a.enviado_em = paraDataHora(a.enviado_em, TZ);
@@ -539,6 +628,24 @@ function lerControle() {
     if (textoCel_(r[0])) ctrl.config[textoCel_(r[0])] = textoCel_(r[1]);
   });
   CONFIG_PADRAO.forEach(c => { if (!(c[0] in ctrl.config)) ctrl.config[c[0]] = c[1]; });
+  ss.getSheetByName(ABA_UNIDADES).getDataRange().getValues().slice(1).forEach(r => {
+    const un = textoCel_(r[0]);
+    if (!un) return;
+    const prim = normGer_(r[1]), sec = normGer_(r[2]);
+    [prim, sec].forEach(g => { if (g && GERENCIAS_VALIDAS.indexOf(g) < 0) ctrl.avisosUnidades.push(`Aba "${ABA_UNIDADES}": gerência '${g}' (unidade '${un}') não é uma gerência conhecida.`); });
+    ctrl.unidades[norm(un)] = { unidade: un, prim, sec };
+  });
+  const campE = COL_ENVIOS.map(c => c[0]);
+  ss.getSheetByName('Envios por gerência').getDataRange().getValues().slice(1).forEach(row => {
+    const e = {};
+    campE.forEach((k, j) => { e[k] = row[j]; });
+    ['gkey', 'mun', 'tipo', 'oficina', 'ger', 'status', 'tipo_envio', 'motivo', 'pdf', 'docx'].forEach(k => { e[k] = textoCel_(e[k]); });
+    if (!e.gkey || !e.ger) return;
+    e.data = paraIso(e.data, TZ);
+    e.n = e.n === '' || e.n === null || isNaN(Number(e.n)) ? null : Number(e.n);
+    e.enviado_em = paraDataHora(e.enviado_em, TZ);
+    ctrl.envios[envioChave_(e.gkey, e.ger)] = e;
+  });
   return ctrl;
 }
 
@@ -562,6 +669,25 @@ function salvarAtividades(atividades) {
   sh.getRange(2, 1, nl, nc).setBackgrounds(atividades.map(a => COLUNAS.map(() => a.revisar ? '#FFF2CC' : '#FFFFFF')));
 }
 
+const envioChave_ = (gkey, ger) => gkey + '#' + ger;
+/** Grava (cria ou substitui) os registros de envio por gerência. envios: lista de objetos no formato de COL_ENVIOS. */
+function salvarEnvios(ctrl, novos) {
+  novos.forEach(e => { ctrl.envios[envioChave_(e.gkey, e.ger)] = e; });
+  const sh = planilhaControle().getSheetByName('Envios por gerência'), lista = Object.keys(ctrl.envios).map(k => ctrl.envios[k]);
+  lista.sort((a, b) => cmp(a.data || '', b.data || '') || cmp(norm(a.mun), norm(b.mun)) || cmp(a.ger, b.ger));
+  const ult = sh.getLastRow();
+  if (ult > 1) sh.getRange(2, 1, ult - 1, COL_ENVIOS.length).clear();
+  if (!lista.length) return;
+  const nl = lista.length, nc = COL_ENVIOS.length;
+  sh.getRange(2, 1, nl, nc).setNumberFormats(lista.map(() => COL_ENVIOS.map(c => FORMATOS_ENVIOS[c[0]] || '@')));
+  sh.getRange(2, 1, nl, nc).setValues(lista.map(e => COL_ENVIOS.map(([k]) => {
+    if (k === 'data') return e.data ? isoParaDate(e.data, TZ) : '';
+    if (k === 'n') return e.n === null || e.n === undefined ? '' : e.n;
+    if (k === 'enviado_em') return e.enviado_em || '';
+    return e[k] === null || e[k] === undefined ? '' : e[k];
+  })));
+}
+
 function anexar_(nomeAba, linhas, formatos) {
   if (!linhas.length) return;
   const sh = planilhaControle().getSheetByName(nomeAba);
@@ -574,12 +700,12 @@ function registrarMudancas(eventos) {
   anexar_('Mudanças do calendário', eventos.map(e => [agora, e[0], e[1], e[2] ? isoParaDate(e[2], TZ) : '', e[3]]),
           ['dd/MM/yyyy HH:mm', '@', '@', 'dd/MM/yyyy', '@']);
 }
-/** logs: [{origem, municipio, datas, n, destinatarios, status, remetente, link, obs}] */
+/** logs: [{origem, municipio, datas, n, destinatarios, status, remetente, link, obs, ger}] */
 function registrarLog(logs) {
   const agora = new Date();
   anexar_('Log', logs.map(l => [agora, l.origem || '', l.municipio || '', l.datas || '', l.n === undefined ? '' : l.n,
-                                l.destinatarios === undefined ? '' : l.destinatarios, l.status || '', l.remetente || '', l.link || '', l.obs || '']),
-          ['dd/MM/yyyy HH:mm', '@', '@', '@', '0', '0', '@', '@', '@', '@']);
+                                l.destinatarios === undefined ? '' : l.destinatarios, l.status || '', l.remetente || '', l.link || '', l.obs || '', l.ger || '']),
+          ['dd/MM/yyyy HH:mm', '@', '@', '@', '0', '0', '@', '@', '@', '@', '@']);
 }
 function salvarConfig(chave, valor) {
   garantirEstrutura();
@@ -677,6 +803,26 @@ function selecionarRespostas(respostas, municipio, data, datasCadastradas, inclu
   return { exatas, segs };
 }
 
+
+/**
+ * Distribui as respostas pelas gerências participantes, usando a aba "Unidades x Gerências":
+ *  - se a gerência primária da unidade participou, a resposta vai só para ela;
+ *  - senão, se a secundária participou, vai só para ela;
+ *  - senão (ou unidade fora da tabela), vai para TODAS as gerências participantes.
+ * Devolve {porGer: {GER: [respostas]}, semUnidade: [unidades não encontradas na tabela]}.
+ */
+function atribuirPorGerencia(respostas, participantes, unidades) {
+  const porGer = {}, semTabela = {};
+  participantes.forEach(g => { porGer[g] = []; });
+  respostas.forEach(r => {
+    const u = unidades[norm(r.setor)];
+    let alvo = null;
+    if (u) alvo = participantes.indexOf(u.prim) >= 0 ? [u.prim] : participantes.indexOf(u.sec) >= 0 ? [u.sec] : null;
+    else semTabela[r.setor || '(vazio)'] = true;
+    (alvo || participantes).forEach(g => { porGer[g].push(r); });
+  });
+  return { porGer, semUnidade: Object.keys(semTabela) };
+}
 // ==================================================================== Relatorio.gs
 /**
  * RELATÓRIO: contagens por pergunta e PDF (HTML convertido em PDF pelo Apps Script).
@@ -745,21 +891,37 @@ const h2_ = t => `<p style="font-size:13px;font-weight:bold;color:${COR_TITULO};
 const h3_ = t => `<p style="font-size:11px;font-weight:bold;color:${COR_TEXTO};margin:12px 0 2px 0">${escHtml(t)}</p>`;
 const perg_ = t => `<p style="font-size:9.5px;color:${COR_SUAVE};margin:0 0 4px 0">${escHtml(t)}</p>`;
 
-/** secoes: [{data, respostas, modalidades}] */
-function htmlRelatorio(municipio, secoes, gerencias, geradoEm) {
+const MIME_DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const ehOficina_ = ctx => !!(ctx && ctx.tipo === 'Oficina');
+/** Título de cada seção (uma por data). ctx = {tipo, oficina}. */
+function tituloSecao_(s, secoes, ctx) {
+  if (ehOficina_(ctx)) return 'Oficina de ' + fmtData(s.data);
+  let t = 'Apoio Técnico de ' + fmtData(s.data);
+  if (secoes.length > 1 && (s.modalidades || []).length) t += ' - ' + s.modalidades.join(' e ');
+  return t;
+}
+
+/** secoes: [{data, respostas, modalidades}]; ctx = {tipo: 'ATM'|'Oficina', oficina} */
+function htmlRelatorio(municipio, secoes, gerencias, geradoEm, ctx) {
   const datas = secoes.map(s => s.data);
   const modalidades = uniq([].concat(...secoes.map(s => s.modalidades || [])));
   const h = [];
   h.push(`<html><head><meta charset="utf-8"></head><body style="font-family:Arial,Helvetica,sans-serif;font-size:11px;color:${COR_TEXTO}">`);
-  h.push(`<p style="font-size:16px;font-weight:bold;text-align:center;color:#000000;margin:6px 0 16px 0">RELATÓRIO DE AVALIAÇÕES DO APOIO TÉCNICO</p>`);
-  h.push(`<p style="font-size:14px;font-weight:bold;color:#000000;margin:0 0 6px 0">Município: ${escHtml(municipio)}</p>`);
-  h.push(`<p style="margin:2px 0"><b>Data do Apoio Técnico:</b> ${escHtml(textoDatas(datas))}</p>`);
-  h.push(`<p style="margin:2px 0"><b>Modalidade:</b> ${escHtml(modalidades.join(' e ') || '-')}</p>`);
+  if (ehOficina_(ctx)) {
+    h.push(`<p style="font-size:16px;font-weight:bold;text-align:center;color:#000000;margin:6px 0 16px 0">RELATÓRIO DE AVALIAÇÃO DE OFICINA</p>`);
+    h.push(`<p style="margin:2px 0"><b>Evento:</b> ${escHtml(ctx.oficina || '-')}</p>`);
+    h.push(`<p style="font-size:14px;font-weight:bold;color:#000000;margin:0 0 6px 0">Município: ${escHtml(municipio)}</p>`);
+    h.push(`<p style="margin:2px 0"><b>Data da Oficina:</b> ${escHtml(textoDatas(datas))}</p>`);
+  } else {
+    h.push(`<p style="font-size:16px;font-weight:bold;text-align:center;color:#000000;margin:6px 0 16px 0">RELATÓRIO DE AVALIAÇÕES DO APOIO TÉCNICO</p>`);
+    h.push(`<p style="font-size:14px;font-weight:bold;color:#000000;margin:0 0 6px 0">Município: ${escHtml(municipio)}</p>`);
+    h.push(`<p style="margin:2px 0"><b>Data do Apoio Técnico:</b> ${escHtml(textoDatas(datas))}</p>`);
+    h.push(`<p style="margin:2px 0"><b>Modalidade:</b> ${escHtml(modalidades.join(' e ') || '-')}</p>`);
+  }
   h.push(`<p style="margin:2px 0"><b>Gerências Participantes:</b> ${escHtml(gerencias.join(', ') || '-')}</p><hr>`);
   secoes.forEach((s, i) => {
     if (i > 0) h.push('<div style="page-break-before:always"></div>');
-    let titulo = 'Apoio Técnico de ' + fmtData(s.data);
-    if (secoes.length > 1 && (s.modalidades || []).length) titulo += ' - ' + s.modalidades.join(' e ');
+    const titulo = tituloSecao_(s, secoes, ctx);
     const r = s.respostas;
     if (!r.length) {
       h.push(h2_(titulo), `<p style="color:${COR_SUAVE}">Não houve avaliações recebidas para esta data.</p>`);
@@ -784,23 +946,38 @@ function htmlRelatorio(municipio, secoes, gerencias, geradoEm) {
 }
 
 /** Alternativa simples (HTML -> PDF), usada se o modelo do Google Docs não estiver disponível. */
-function gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias) {
-  const html = htmlRelatorio(municipio, secoes, gerencias, Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm'));
+function gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias, ctx) {
+  const html = htmlRelatorio(municipio, secoes, gerencias, Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm'), ctx);
   return Utilities.newBlob(html, 'text/html', nomeArquivo + '.html').getAs('application/pdf').setName(nomeArquivo + '.pdf');
 }
 
 // ---------------------------------------------------------------- PDF a partir do modelo do Google Docs
 /**
- * Devolve {blob, aviso}. Usa o modelo do Google Docs (config MODELO_RELATORIO); se não houver modelo ou der erro,
- * usa o PDF simples e devolve um aviso explicando.
+ * Devolve {blob, docx, aviso}. Usa o modelo do Google Docs (MODELO_RELATORIO para ATM, MODELO_RELATORIO_OFICINA para oficina);
+ * se não houver modelo ou der erro, usa o PDF simples (sem Word) e devolve um aviso explicando.
+ * ctx = {tipo: 'ATM'|'Oficina', oficina}.
  */
-function gerarPdfRelatorio(cfg, nomeArquivo, municipio, secoes, gerencias) {
-  const ref = String((cfg && cfg.MODELO_RELATORIO) || '').trim();
+function gerarPdfRelatorio(cfg, nomeArquivo, municipio, secoes, gerencias, ctx) {
+  const ref = String((cfg && (ehOficina_(ctx) ? cfg.MODELO_RELATORIO_OFICINA : cfg.MODELO_RELATORIO)) || '').trim();
   if (ref) {
-    try { return { blob: gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias), aviso: '' }; }
-    catch (e) { return { blob: gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias), aviso: 'Modelo do Docs indisponível (' + e.message + '); usei o PDF simples.' }; }
+    try { const r = gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias, ctx); return { blob: r.pdf, docx: r.docx, aviso: r.aviso }; }
+    catch (e) { return { blob: gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias, ctx), docx: null, aviso: 'Modelo do Docs indisponível (' + e.message + '); usei o PDF simples, sem Word.' }; }
   }
-  return { blob: gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias), aviso: '' };
+  return { blob: gerarPdfHtml_(nomeArquivo, municipio, secoes, gerencias, ctx), docx: null, aviso: 'Sem modelo do Docs configurado: PDF simples, sem Word.' };
+}
+
+/** Exporta um Google Docs para Word (.docx). Pede o arquivo ao próprio Google com o token do script. */
+function exportarDocx_(docId, nome) {
+  const token = ScriptApp.getOAuthToken();
+  const urls = ['https://docs.google.com/document/d/' + docId + '/export?format=docx',
+                'https://www.googleapis.com/drive/v3/files/' + docId + '/export?mimeType=' + encodeURIComponent(MIME_DOCX)];
+  let ultimo = '';
+  for (let i = 0; i < urls.length; i++) {
+    const r = UrlFetchApp.fetch(urls[i], { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    if (r.getResponseCode() === 200) return r.getBlob().setContentType(MIME_DOCX).setName(nome + '.docx');
+    ultimo = 'HTTP ' + r.getResponseCode();
+  }
+  throw new Error('exportação do Word falhou (' + ultimo + ')');
 }
 
 function idDocumento_(ref) {
@@ -843,14 +1020,14 @@ function imagemGrafico_(contagem, horizontal) {
 }
 
 /** Gera o PDF copiando o modelo, trocando os marcadores e inserindo o conteúdo no lugar de {{CONTEUDO}}. */
-function gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias) {
+function gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias, ctx) {
   const modeloId = idDocumento_(ref);
   const copia = DriveApp.getFileById(modeloId).makeCopy('tmp_' + nomeArquivo);
   try {
     const doc = DocumentApp.openById(copia.getId()), body = doc.getBody();
     body.setMarginTop(PAG.margemTopo).setMarginBottom(PAG.margemBase);          // folga acima e, principalmente, abaixo (rodapé do timbrado)
     const datas = secoes.map(s => s.data), mods = uniq([].concat(...secoes.map(s => s.modalidades || [])));
-    const valores = { MUNICIPIO: municipio, DATAS: textoDatas(datas), MODALIDADE: mods.join(' e ') || '-',
+    const valores = { MUNICIPIO: municipio, OFICINA: (ctx && ctx.oficina) || '', DATAS: textoDatas(datas), MODALIDADE: mods.join(' e ') || '-',
                       GERENCIAS: gerencias.join(', ') || '-', EMAIL: gerencias.join(', ') || '-',      // {{EMAIL}}: nome usado no modelo atual para "Gerências Participantes"
                       GERADO_EM: Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm') };
     const temModalidade = !!body.findText('\\{\\{MODALIDADE\\}\\}');
@@ -859,7 +1036,7 @@ function gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias) {
     [body, doc.getHeader(), doc.getFooter()].forEach(parte => {
       if (parte) Object.keys(valores).forEach(k => parte.replaceText('\\{\\{' + k + '\\}\\}', valores[k]));
     });
-    if (!temModalidade && parDatas) {                           // modelo sem a linha "Modalidade": acrescenta logo abaixo das datas
+    if (!temModalidade && parDatas && !ehOficina_(ctx)) {                           // modelo sem a linha "Modalidade": acrescenta logo abaixo das datas
       const p = body.insertParagraph(body.getChildIndex(parDatas) + 1, 'Modalidade: ' + valores.MODALIDADE);
       p.editAsText().setFontFamily('Arial').setFontSize(10).setBold(false);
       p.editAsText().setBold(0, 'Modalidade:'.length - 1, true);
@@ -869,17 +1046,20 @@ function gerarPdfDocs_(ref, nomeArquivo, municipio, secoes, gerencias) {
     if (!achou) throw new ErroDados('o modelo não tem o marcador {{CONTEUDO}}');
     const ph = achou.getElement().getParent();
     if (ph.getType() !== DocumentApp.ElementType.PARAGRAPH) throw new ErroDados('{{CONTEUDO}} precisa estar num parágrafo comum');
-    montarConteudoDocs_(body, ph.asParagraph(), secoes);
+    montarConteudoDocs_(body, ph.asParagraph(), secoes, ctx);
     doc.saveAndClose();
     const pdf = DriveApp.getFileById(copia.getId()).getAs('application/pdf').setName(nomeArquivo + '.pdf');
-    return pdf;
+    let docx = null, aviso = '';
+    try { docx = exportarDocx_(copia.getId(), nomeArquivo); }
+    catch (e) { aviso = 'O PDF foi gerado, mas não consegui gerar o Word (' + e.message + ').'; }
+    return { pdf, docx, aviso };
   } finally {
     try { copia.setTrashed(true); } catch (e) { /* ignora */ }
   }
 }
 
 const AZUL_DOC = '#1F3864', CINZA_DOC = '#6B7280';
-function montarConteudoDocs_(body, ph, secoes) {
+function montarConteudoDocs_(body, ph, secoes, ctx) {
   const onde = () => body.getChildIndex(ph);                     // sempre insere logo antes do marcador
   let usado = PAG.cabecalhoModelo;                               // altura já ocupada na página atual (a 1ª tem o cabeçalho do modelo)
   const quebrarSe = h => { if (usado > 0 && usado + h > UTIL_PAG) { body.insertPageBreak(onde()); usado = 0; } };
@@ -910,8 +1090,7 @@ function montarConteudoDocs_(body, ph, secoes) {
   secoes.forEach((s, i) => {
     if (i > 0) { body.insertPageBreak(onde()); usado = 0; }       // cada data começa em página nova
     const r = s.respostas;
-    let titulo = 'Apoio Técnico de ' + fmtData(s.data);
-    if (secoes.length > 1 && (s.modalidades || []).length) titulo += ' - ' + s.modalidades.join(' e ');
+    const titulo = tituloSecao_(s, secoes, ctx);
     if (!r.length) {
       par(titulo, { tam: 13, neg: true, cor: AZUL_DOC, antes: 10, depois: 6 });
       par('Não houve avaliações recebidas para esta data.', { cor: CINZA_DOC });
@@ -954,10 +1133,16 @@ function montarConteudoDocs_(body, ph, secoes) {
 /**
  * FLUXO: semana (calendário + respostas), revisão, preparo e envio de e-mails (manual) e envio automático.
  */
-const ASSUNTO_RELATORIO_PADRAO = 'Relatório de Avaliações do Apoio Técnico - {{MUNICIPIO}}';
-const CORPO_RELATORIO_PADRAO = 'Prezados(as),\n\nSegue em anexo o relatório de avaliações do Apoio Técnico realizado em {{MUNICIPIO}} ({{DATA}}).\n\nAtenciosamente.';
-const ASSUNTO_SEM_PADRAO = 'Apoio Técnico - {{MUNICIPIO}} - sem avaliações recebidas';
-const CORPO_SEM_PADRAO = 'Prezados(as),\n\nInformamos que não foram recebidas avaliações do Apoio Técnico realizado em {{MUNICIPIO}} ({{DATA}}).\n\nAtenciosamente.';
+const ASSUNTO_RELATORIO_PADRAO = 'Relatório de Avaliações do Apoio Técnico - {{MUNICIPIO}} - {{GERENCIA}}';
+const CORPO_RELATORIO_PADRAO = 'Prezados(as),\n\nSegue em anexo o relatório de avaliações do Apoio Técnico realizado em {{MUNICIPIO}} ({{DATA}}), referente à gerência {{GERENCIA}}.\n\nAtenciosamente.';
+const ASSUNTO_SEM_PADRAO = 'Apoio Técnico - {{MUNICIPIO}} - {{GERENCIA}} - sem avaliações recebidas';
+const CORPO_SEM_PADRAO = 'Prezados(as),\n\nInformamos que não foram recebidas avaliações do Apoio Técnico realizado em {{MUNICIPIO}} ({{DATA}}) para a gerência {{GERENCIA}}.\n\nAtenciosamente.';
+const ASSUNTO_OFICINA_PADRAO = 'Relatório de Avaliação da Oficina - {{OFICINA}} - {{MUNICIPIO}} - {{GERENCIA}}';
+const CORPO_OFICINA_PADRAO = 'Prezados(as),\n\nSegue em anexo o relatório de avaliação da oficina "{{OFICINA}}", realizada em {{MUNICIPIO}} ({{DATA}}), referente à gerência {{GERENCIA}}.\n\nAtenciosamente.';
+const ASSUNTO_SEM_OFICINA = 'Oficina - {{OFICINA}} - {{MUNICIPIO}} - {{GERENCIA}} - sem avaliações recebidas';
+const CORPO_SEM_OFICINA = 'Prezados(as),\n\nInformamos que não foram recebidas avaliações da oficina "{{OFICINA}}", realizada em {{MUNICIPIO}} ({{DATA}}), para a gerência {{GERENCIA}}.\n\nAtenciosamente.';
+const NAO_ENVIADO = 'Não enviado';
+const LIMITE_AUTO_MS = 4.5 * 60 * 1000;    // o Apps Script para a execução em 6 min: deixa folga e continua na próxima rodada
 const GATILHO = 'gatilhoAutomatico';
 
 function comTrava_(fn) {
@@ -970,28 +1155,61 @@ const lista_ = t => String(t || '').split(/[;,]+/).map(s => s.trim()).filter(Boo
 const simNao_ = v => norm(v) === 'sim';
 
 // ---------------------------------------------------------------- agrupamento (mesmo município no mesmo dia = uma atividade)
+/** Agrupa as linhas do calendário em atividades: ATM = município + data; oficina = município + data + nome da oficina. */
 function agrupar(atividades) {
   const grupos = {};
   atividades.forEach(a => {
-    const k = norm(a.mun) + '|' + a.data;
-    const g = grupos[k] = grupos[k] || { municipio: a.mun, data: a.data, gerencias: [], modalidades: [], linhas: [] };
-    g.gerencias = uniq(g.gerencias.concat(lista_(a.ger)));
-    g.modalidades = uniq(g.modalidades.concat([a.modalidade]));
+    const of = a.tipo === 'Oficina';
+    const k = (of ? 'O|' : 'A|') + norm(a.mun) + '|' + a.data + (of ? '|' + norm(a.oficina) : '');
+    const g = grupos[k] = grupos[k] || { tipo: of ? 'Oficina' : 'ATM', oficina: of ? a.oficina : '', municipio: a.mun, data: a.data, gerencias: [], modalidades: [], linhas: [] };
+    g.gerencias = uniq(g.gerencias.concat(lista_(a.ger).map(normGer_)));
+    if (a.modalidade) g.modalidades = uniq(g.modalidades.concat([a.modalidade]));
     g.linhas.push(a);
   });
   return Object.keys(grupos).map(k => {
     const g = grupos[k];
-    const env = g.linhas.filter(a => a.status === ENVIADO), sem = g.linhas.filter(a => a.status === SEM_AVALIACOES);
-    const marcados = env.length ? env : sem;
-    g.status = marcados.length ? marcados[0].status : '';
-    const datas = marcados.map(a => a.enviado_em).filter(Boolean);
-    g.enviado_em = datas.length ? new Date(Math.max.apply(null, datas.map(d => d.getTime()))) : null;
-    g.tipo_envio = marcados.length ? marcados[0].tipo_envio : '';
-    g.motivo = g.status === ENVIADO ? '' : (g.linhas.map(a => a.motivo).filter(Boolean)[0] || '');
     g.nao_auto = g.linhas.some(a => a.nao_auto);
-    g.gkey = g.data + '|' + g.municipio;
+    g.gkey = gkeyDe_({ data: g.data, mun: g.municipio, tipo: g.tipo, oficina: g.oficina });
+    g.pasta = g.linhas.map(a => a.link).filter(Boolean)[0] || '';
     return g;
-  }).sort((a, b) => cmp(a.data, b.data) || cmp(norm(a.municipio), norm(b.municipio)));
+  }).sort((a, b) => cmp(a.data, b.data) || cmp(norm(a.municipio), norm(b.municipio)) || cmp(norm(a.oficina), norm(b.oficina)));
+}
+
+/** Situação de envio de cada gerência participante da atividade (lida da aba "Envios por gerência"). */
+function estadoGerencias_(g, ctrl) {
+  const algum = g.gerencias.some(x => ctrl.envios[envioChave_(g.gkey, x)]);
+  const legado = !algum ? g.linhas.filter(a => a.status === ENVIADO)[0] : null;      // envio feito antes desta versão (um relatório só)
+  return g.gerencias.map(ger => {
+    const e = ctrl.envios[envioChave_(g.gkey, ger)];
+    if (e) return { ger, status: e.status, n: e.n, enviado_em: e.enviado_em, tipo_envio: e.tipo_envio, motivo: e.motivo, pdf: e.pdf, docx: e.docx };
+    if (legado) return { ger, status: ENVIADO, n: legado.n, enviado_em: legado.enviado_em, tipo_envio: legado.tipo_envio || 'Anterior', motivo: '', pdf: legado.link, docx: '' };
+    return { ger, status: '', n: null, enviado_em: null, tipo_envio: '', motivo: g.linhas.map(a => a.motivo).filter(Boolean)[0] || '', pdf: '', docx: '' };
+  });
+}
+const feito_ = e => e.status === ENVIADO || e.status === SEM_AVALIACOES;
+
+/** Resume nas linhas da aba Atividades o andamento dos envios da atividade (a aba Envios por gerência é a fonte). extra: {n, link}. */
+function atualizarResumo_(ctrl, gkey, extra) {
+  const g = agrupar(ativas(ctrl).filter(a => !a.revisar && gkeyDe_(a) === gkey))[0];
+  if (!g) return;
+  const est = estadoGerencias_(g, ctrl), feitos = est.filter(feito_);
+  const status = !feitos.length ? '' : feitos.length === est.length ? (est.some(e => e.status === ENVIADO) ? ENVIADO : SEM_AVALIACOES) : PARCIAL;
+  const datas = feitos.map(e => e.enviado_em).filter(Boolean);
+  const ultimo = datas.length ? new Date(Math.max.apply(null, datas.map(d => d.getTime()))) : null;
+  const motivos = est.filter(e => !feito_(e) && e.motivo).map(e => e.ger + ': ' + e.motivo).join(' | ');
+  g.linhas.forEach(a => {
+    Object.assign(a, { status, enviado_em: ultimo, tipo_envio: feitos.length ? feitos[feitos.length - 1].tipo_envio : '', motivo: motivos });
+    if (extra && extra.n !== undefined && extra.n !== null) a.n = extra.n;
+    if (extra && extra.link) a.link = extra.link;
+  });
+}
+
+/** Respostas da atividade (município + data, e dia seguinte se aplicável) e sua distribuição entre as gerências participantes. */
+function respostasDoGrupo_(ctrl, respostas, g, incluirSeguinte) {
+  const cfg = ctrl.config, datasCad = datasPorMunicipio_(ctrl)[norm(g.municipio)] || [];
+  const s = selecionarRespostas(respostas, g.municipio, g.data, datasCad, incluirSeguinte, cfg.CAMPO_DATA_BUSCA);
+  const todas = s.exatas.concat(s.segs), at = atribuirPorGerencia(todas, g.gerencias, ctrl.unidades);
+  return { todas, porGer: at.porGer, semUnidade: at.semUnidade };
 }
 function datasPorMunicipio_(ctrl) {
   const d = {};
@@ -1048,14 +1266,19 @@ function carregarSemana(ini, aceitar) {
     ctx.n_revisar = ativ.filter(a => a.revisar).length;
     ctx.n_revisar_semana = ativ.filter(a => a.revisar && a.data >= ini && a.data <= fim).length;
     ctx.grupos = agrupar(ativ.filter(a => !a.revisar && a.data >= ini && a.data <= fim));
-    const datasCad = datasPorMunicipio_(ctrl), inc = simNao_(cfg.INCLUIR_DIA_SEGUINTE);
+    const inc = simNao_(cfg.INCLUIR_DIA_SEGUINTE), semUnidade = {};
     ctx.grupos.forEach(g => {
-      g.exatas = g.seguinte = null;
+      g.total = null;
+      const est = estadoGerencias_(g, ctrl);
       if (ctx.respostas) {
-        const s = selecionarRespostas(ctx.respostas, g.municipio, g.data, datasCad[norm(g.municipio)], inc, cfg.CAMPO_DATA_BUSCA);
-        g.exatas = s.exatas.length; g.seguinte = s.segs.length;
+        const r = respostasDoGrupo_(ctrl, ctx.respostas, g, inc);
+        g.total = r.todas.length;
+        est.forEach(e => { e.nAtual = r.porGer[e.ger].length; });
+        r.semUnidade.forEach(u => { semUnidade[u] = true; });
       }
+      g.est = est;
     });
+    ctx.semUnidade = Object.keys(semUnidade);
     ctx.itens_revisao = avisosDaSemana(cfg, ctrl, ctx);
     ctx.incluirSeguinte = inc;
     PropertiesService.getScriptProperties().setProperty('AVISOS_SEMANA', JSON.stringify({ ini, itens: ctx.itens_revisao }));
@@ -1067,6 +1290,9 @@ function carregarSemana(ini, aceitar) {
 function avisosDaSemana(cfg, ctrl, ctx) {
   const ini = ctx.ini, fim = ctx.fim, hoje = hojeIso(), inc = simNao_(cfg.INCLUIR_DIA_SEGUINTE), campo = cfg.CAMPO_DATA_BUSCA;
   const itens = ctx.avisos.map(a => ({ tipo: 'Calendário', municipio: '', data: null, detalhe: a }));
+  (ctrl.avisosUnidades || []).forEach(a => itens.push({ tipo: 'Tabela de unidades', municipio: '', data: null, detalhe: a }));
+  (ctx.semUnidade || []).forEach(u => itens.push({ tipo: 'Unidade fora da tabela', municipio: '', data: null,
+    detalhe: `A unidade/setor '${u}' não está na aba "${ABA_UNIDADES}": essas respostas entram nos relatórios de todas as gerências participantes.` }));
   const cad = {};
   ativas(ctrl).forEach(a => { const k = norm(a.mun); cad[k] = cad[k] || {}; cad[k][a.data] = a; });
   const sem = {}, vistos = {};
@@ -1077,7 +1303,7 @@ function avisosDaSemana(cfg, ctrl, ctx) {
     const alvo = dias[d] || (inc && !dias[d] ? dias[addDias(d, -1)] : null);
     if (!alvo) {
       if (d < hoje) { const k = r.municipio + '|' + d; sem[k] = (sem[k] || 0) + 1; }
-    } else if (alvo.status === ENVIADO && alvo.enviado_em && r.carimbo && r.carimbo.getTime() > alvo.enviado_em.getTime()) {
+    } else if ((alvo.status === ENVIADO || alvo.status === PARCIAL) && alvo.enviado_em && r.carimbo && r.carimbo.getTime() > alvo.enviado_em.getTime()) {
       const k = alvo.chave + '|' + r.carimbo.getTime();
       if (!vistos[k]) {
         vistos[k] = true;
@@ -1090,26 +1316,37 @@ function avisosDaSemana(cfg, ctrl, ctx) {
     const [mun, d] = k.split('|');
     itens.push({ tipo: 'Avaliação sem atividade', municipio: mun, data: d, detalhe: `${sem[k]} resposta(s) de ${mun} em ${fmtData(d)} sem atividade correspondente no calendário.` });
   });
-  ctx.grupos.filter(g => !g.status).forEach(g => {
-    emailsDasGerencias(ctrl, g.gerencias).avisos.forEach(av => itens.push({ tipo: 'Gerência sem e-mail', municipio: g.municipio, data: g.data, detalhe: av }));
+  const porDia = {};
+  ctx.grupos.forEach(g => { const k = norm(g.municipio) + '|' + g.data; (porDia[k] = porDia[k] || []).push(g); });
+  Object.keys(porDia).filter(k => porDia[k].length > 1).forEach(k => {
+    const gs = porDia[k];
+    itens.push({ tipo: 'Mais de uma atividade no dia', municipio: gs[0].municipio, data: gs[0].data,
+      detalhe: 'O formulário não diferencia ATM de oficina: as avaliações desse município e dia entram nos relatórios de todas as atividades (' + gs.map(g => g.tipo === 'Oficina' ? 'Oficina ' + g.oficina : 'ATM').join(', ') + ').' });
+  });
+  ctx.grupos.forEach(g => {
+    const pend = g.est.filter(e => !feito_(e)).map(e => e.ger);
+    if (pend.length) emailsDasGerencias(ctrl, pend).avisos.forEach(av => itens.push({ tipo: 'Gerência sem e-mail', municipio: g.municipio, data: g.data, detalhe: av }));
   });
   return itens;
 }
 
 // ---------------------------------------------------------------- revisão manual
-function confirmarRevisao(chave, data, municipio, modalidade, gerencias) {
+function confirmarRevisao(chave, data, municipio, modalidade, gerencias, oficina) {
   const oficial = municipioOficial(municipio);
   if (!oficial) throw new ErroDados(`'${municipio}' não está na lista oficial de municípios de Pernambuco.`);
   if (!data || diaSemana(data) >= 5) throw new ErroDados('Informe uma data de segunda a sexta.');
-  if (MODALIDADES.indexOf(modalidade) < 0) throw new ErroDados('Escolha a modalidade (Presencial ou Remoto).');
   const ger = GERENCIAS_VALIDAS.filter(g => (gerencias || []).indexOf(g) >= 0);
   if (!ger.length) throw new ErroDados('Marque ao menos uma gerência.');
   return comTrava_(() => {
     const ctrl = lerControle(), a = ctrl.atividades.filter(x => x.chave === chave)[0];
     if (!a) throw new ErroDados('Atividade não encontrada (a planilha mudou?). Recarregue a página.');
+    if (a.tipo === 'Oficina') {
+      if (!String(oficina || '').trim()) throw new ErroDados('Informe o nome da oficina.');
+      a.oficina = String(oficina).trim(); modalidade = '';
+    } else if (MODALIDADES.indexOf(modalidade) < 0) throw new ErroDados('Escolha a modalidade (Presencial ou Remoto).');
     Object.assign(a, { data, mun: oficial, modalidade, ger: ger.join(', '), revisar: false, manual: true, motivo: '', atualizado: new Date() });
     salvarAtividades(ctrl.atividades);
-    registrarMudancas([['CONFIRMADO', oficial, data, `${ger.join(', ')} (${modalidade})`]]);
+    registrarMudancas([['CONFIRMADO', oficial, data, a.tipo === 'Oficina' ? `Oficina: ${a.oficina} — ${ger.join(', ')}` : `${ger.join(', ')} (${modalidade})`]]);
   });
 }
 
@@ -1117,13 +1354,18 @@ function definirNaoAuto(gkeys, valor) {
   return comTrava_(() => {
     const ctrl = lerControle(), chaves = {};
     gkeys.forEach(k => { chaves[k] = true; });
-    ativas(ctrl).forEach(a => { if (chaves[a.data + '|' + a.mun]) a.nao_auto = !!valor; });
+    ativas(ctrl).forEach(a => { if (chaves[gkeyDe_(a)]) a.nao_auto = !!valor; });
     salvarAtividades(ctrl.atividades);
   });
 }
 
 // ---------------------------------------------------------------- PDF + e-mail
-function preencher_(modelo, municipio, datas) { return modelo.replace(/\{\{MUNICIPIO\}\}/g, municipio).replace(/\{\{DATA\}\}/g, textoDatas(datas)); }
+/** extra: {ger, oficina}. Marcadores: {{MUNICIPIO}}, {{DATA}}, {{GERENCIA}}, {{OFICINA}}. */
+function preencher_(modelo, municipio, datas, extra) {
+  extra = extra || {};
+  return modelo.replace(/\{\{MUNICIPIO\}\}/g, municipio).replace(/\{\{DATA\}\}/g, textoDatas(datas))
+    .replace(/\{\{GERENCIA\}\}/g, extra.ger || '').replace(/\{\{OFICINA\}\}/g, extra.oficina || '');
+}
 
 function pastaPdfs_() {
   const props = PropertiesService.getScriptProperties(), id = props.getProperty('PASTA_PDFS_ID');
@@ -1132,48 +1374,59 @@ function pastaPdfs_() {
   props.setProperty('PASTA_PDFS_ID', pasta.getId());
   return pasta;
 }
-function salvarPdf_(blob) {
-  const pasta = pastaPdfs_(), antigos = pasta.getFilesByName(blob.getName());
-  while (antigos.hasNext()) antigos.next().setTrashed(true);            // reenvio substitui o PDF anterior
+/** Subpasta da atividade dentro de "Relatórios ATM - PDFs": guarda o PDF e o Word de cada gerência. */
+function pastaAtividade_(g) {
+  const raiz = pastaPdfs_();
+  const nome = (g.data + ' - ' + g.municipio + (g.tipo === 'Oficina' ? ' - Oficina ' + g.oficina : '')).replace(/[\\/:*?"<>|]+/g, ' ').slice(0, 120);
+  const it = raiz.getFoldersByName(nome);
+  let pasta = it.hasNext() ? it.next() : null;
+  if (!pasta) {
+    pasta = raiz.createFolder(nome);
+    try { pasta.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* política do domínio pode bloquear */ }
+  }
+  return { pasta, url: pasta.getUrl() };
+}
+function salvarArquivo_(pasta, blob) {
+  const antigos = pasta.getFilesByName(blob.getName());
+  while (antigos.hasNext()) antigos.next().setTrashed(true);            // reenvio substitui o arquivo anterior
   const f = pasta.createFile(blob);
   try { f.setSharing(DriveApp.Access.DOMAIN_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { /* política do domínio pode bloquear */ }
   return { id: f.getId(), url: f.getUrl() };
 }
+function nomeArquivo_(g, ger) {
+  return 'Relatorio_' + (g.tipo === 'Oficina' ? 'Oficina_' + slug(g.oficina).slice(0, 40) + '_' : '') + slug(g.municipio) + '_' + g.data + '_' + ger;
+}
 
-/** selecionados: [{municipio, data}] de UM município. Calcula as avaliações e gera o PDF (sem enviar). */
-function prepararEnvio(ctrl, respostas, selecionados, incluirSeguinte, semPdf) {
-  const cfg = ctrl.config, campo = cfg.CAMPO_DATA_BUSCA;
-  const datas = uniq(selecionados.map(s => s.data)).sort();
-  const alvoNorm = norm(selecionados[0].municipio);
-  const grupos = agrupar(ativas(ctrl).filter(a => !a.revisar && norm(a.mun) === alvoNorm && datas.indexOf(a.data) >= 0));
-  if (!grupos.length) throw new ErroDados('Atividade não encontrada. Recarregue a página da semana.');
-  const municipio = grupos[0].municipio;
-  const gerencias = uniq([].concat(...grupos.map(g => g.gerencias)));
-  const datasCad = datasPorMunicipio_(ctrl)[alvoNorm];
-  const secoes = [], contagens = [];
-  grupos.forEach(g => {
-    const s = selecionarRespostas(respostas, municipio, g.data, datasCad, incluirSeguinte, campo);
-    contagens.push({ data: g.data, exatas: s.exatas.length, seguinte: s.segs.length });
-    secoes.push({ data: g.data, respostas: s.exatas.concat(s.segs), modalidades: g.modalidades });
-  });
-  const total = secoes.reduce((t, s) => t + s.respostas.length, 0);
-  const em = emailsDasGerencias(ctrl, gerencias);
-  let pdf = null;
+/** Calcula as avaliações de UMA gerência numa atividade e gera o PDF e o Word dela (sem enviar). gkey: data|município[|oficina]. */
+function prepararEnvio(ctrl, respostas, gkey, ger, incluirSeguinte, semPdf) {
+  const cfg = ctrl.config;
+  const g = agrupar(ativas(ctrl).filter(a => !a.revisar && gkeyDe_(a) === gkey))[0];
+  if (!g) throw new ErroDados('Atividade não encontrada. Recarregue a página da semana.');
+  if (g.gerencias.indexOf(ger) < 0) throw new ErroDados(`A gerência ${ger} não participa desta atividade.`);
+  const r = respostasDoGrupo_(ctrl, respostas, g, incluirSeguinte), minhas = r.porGer[ger];
+  const ctxR = { tipo: g.tipo, oficina: g.oficina }, oficina = g.tipo === 'Oficina';
+  const em = emailsDasGerencias(ctrl, [ger]);
+  let pdf = null, docx = null, pastaUrl = '';
   const avisosPdf = [];
-  if (total && !semPdf) {
-    const nome = `Relatorio_${slug(municipio)}_${secoes.map(s => s.data).join('_')}`;
-    const g = gerarPdfRelatorio(cfg, nome, municipio, secoes, gerencias);
-    if (g.aviso) avisosPdf.push(g.aviso);
-    pdf = salvarPdf_(g.blob);
+  if (minhas.length && !semPdf) {
+    const gr = gerarPdfRelatorio(cfg, nomeArquivo_(g, ger), g.municipio, [{ data: g.data, respostas: minhas, modalidades: g.modalidades }], [ger], ctxR);
+    if (gr.aviso) avisosPdf.push(gr.aviso);
+    const pa = pastaAtividade_(g);
+    pdf = salvarArquivo_(pa.pasta, gr.blob);
+    if (gr.docx) docx = salvarArquivo_(pa.pasta, gr.docx);
+    pastaUrl = pa.url;
   }
-  const conta = Session.getEffectiveUser().getEmail();
-  const modelos = total ? [cfg.ASSUNTO_RELATORIO || ASSUNTO_RELATORIO_PADRAO, cfg.CORPO_RELATORIO || CORPO_RELATORIO_PADRAO]
-                        : [cfg.ASSUNTO_SEM_RESPOSTAS || ASSUNTO_SEM_PADRAO, cfg.CORPO_SEM_RESPOSTAS || CORPO_SEM_PADRAO];
+  const conta = Session.getEffectiveUser().getEmail(), extra = { ger, oficina: g.oficina };
+  const modelos = minhas.length
+    ? (oficina ? [cfg.ASSUNTO_RELATORIO_OFICINA || ASSUNTO_OFICINA_PADRAO, cfg.CORPO_RELATORIO_OFICINA || CORPO_OFICINA_PADRAO]
+               : [cfg.ASSUNTO_RELATORIO || ASSUNTO_RELATORIO_PADRAO, cfg.CORPO_RELATORIO || CORPO_RELATORIO_PADRAO])
+    : (oficina ? [ASSUNTO_SEM_OFICINA, CORPO_SEM_OFICINA] : [cfg.ASSUNTO_SEM_RESPOSTAS || ASSUNTO_SEM_PADRAO, cfg.CORPO_SEM_RESPOSTAS || CORPO_SEM_PADRAO]);
   return {
-    municipio, datas: secoes.map(s => s.data), gerencias, modalidades: uniq([].concat(...secoes.map(s => s.modalidades))),
-    incluirSeguinte, contagens, total, pdfId: pdf ? pdf.id : '', pdfUrl: pdf ? pdf.url : '', avisos: em.avisos.concat(avisosPdf),
+    gkey, ger, tipo: g.tipo, oficina: g.oficina, municipio: g.municipio, data: g.data, datas: [g.data], gerencias: [ger], modalidades: g.modalidades,
+    incluirSeguinte, total: minhas.length, totalAtividade: r.todas.length,
+    pdfId: pdf ? pdf.id : '', pdfUrl: pdf ? pdf.url : '', docxUrl: docx ? docx.url : '', pastaUrl, avisos: em.avisos.concat(avisosPdf),
     remetente: cfg.REMETENTE || conta, nome: cfg.NOME_REMETENTE || 'NATM', para: cfg.EMAIL_PARA || conta, cc: '', cco: em.emails.join(', '),
-    assunto: preencher_(modelos[0], municipio, datas), corpo: preencher_(modelos[1], municipio, datas),
+    assunto: preencher_(modelos[0], g.municipio, [g.data], extra), corpo: preencher_(modelos[1], g.municipio, [g.data], extra),
   };
 }
 
@@ -1194,15 +1447,13 @@ function enviarEmail_(cfg, m) {
 }
 
 function registrarEnvio_(ctrl, prep, tipo, nDest, usado, nota) {
-  const agora = new Date(), nPorData = {};
-  prep.contagens.forEach(c => { nPorData[c.data] = c.exatas + c.seguinte; });
-  ativas(ctrl).forEach(a => {
-    if (norm(a.mun) === norm(prep.municipio) && a.data in nPorData && !a.revisar)
-      Object.assign(a, { status: ENVIADO, n: nPorData[a.data], enviado_em: agora, tipo_envio: tipo, motivo: '', link: prep.pdfUrl || '' });
-  });
+  const agora = new Date();
+  salvarEnvios(ctrl, [{ gkey: prep.gkey, data: prep.data, mun: prep.municipio, tipo: prep.tipo, oficina: prep.oficina || '', ger: prep.ger,
+                        status: ENVIADO, n: prep.total, enviado_em: agora, tipo_envio: tipo, motivo: '', pdf: prep.pdfUrl || '', docx: prep.docxUrl || '' }]);
+  atualizarResumo_(ctrl, prep.gkey, { n: prep.totalAtividade, link: prep.pastaUrl });
   salvarAtividades(ctrl.atividades);
-  registrarLog([{ origem: tipo, municipio: prep.municipio, datas: textoDatas(prep.datas), n: prep.total, destinatarios: nDest,
-                  status: ENVIADO, remetente: usado, link: prep.pdfUrl, obs: nota }]);
+  registrarLog([{ origem: tipo, municipio: prep.municipio + (prep.tipo === 'Oficina' ? ' (Oficina: ' + prep.oficina + ')' : ''), datas: fmtData(prep.data), n: prep.total,
+                  destinatarios: nDest, status: ENVIADO, remetente: usado, link: prep.pdfUrl, obs: nota, ger: prep.ger }]);
 }
 
 /** Envio manual: 'd' é o rascunho (editado na tela). */
@@ -1234,12 +1485,14 @@ function criarRascunho(d) {
 
 // ---------------------------------------------------------------- automático
 /**
- * Trata as atividades do dia útil anterior (segunda trata as de sexta).
- * Envia só se: não está em revisão, não é "Não enviar automático", ainda não foi enviada e tem ao menos 1 avaliação.
+ * Trata as atividades (ATM e oficinas) do dia útil anterior (segunda trata as de sexta), uma gerência por vez.
+ * Envia para a gerência só se: a atividade não está em revisão, não é "Não enviar automático", a gerência ainda não recebeu
+ * e ela tem ao menos 1 avaliação atribuída e e-mail válido.
  * opts: {origem, simular, alvo}
  */
 function rodarAutomatico_(opts) {
   return comTrava_(() => {
+    const t0 = Date.now();
     const ctrl = lerControle(), cfg = ctrl.config, hoje = hojeIso(), alvo = opts.alvo || diaUtilAnterior(hoje);
     const teste = simNao_(cfg.MODO_TESTE), simular = !!opts.simular, origem = opts.origem || 'Automático';
     const res = { alvo, hoje, teste, simular, itens: [], erros: [], quando: Utilities.formatDate(new Date(), TZ, 'dd/MM/yyyy HH:mm') };
@@ -1253,57 +1506,73 @@ function rodarAutomatico_(opts) {
     catch (e) { res.erros.push(`Respostas do formulário indisponíveis: ${e.message}. Nada foi enviado.`); }
 
     if (respostas) {
-      const dodia = ativas(ctrl).filter(a => a.data === alvo), inc = simNao_(cfg.INCLUIR_DIA_SEGUINTE);
-      const datasCad = datasPorMunicipio_(ctrl), logs = [];
-      const marcar = (g, campos) => { if (!simular && !teste) g.linhas.forEach(a => Object.assign(a, campos)); };
+      const dodia = ativas(ctrl).filter(a => a.data === alvo), inc = simNao_(cfg.INCLUIR_DIA_SEGUINTE), gravar = !simular && !teste;
+      const rotulo = (g, ger) => (g.tipo === 'Oficina' ? 'Oficina ' + g.oficina + ' — ' : '') + g.municipio + (ger ? ' · ' + ger : '');
+      const registrar = (g, ger, campos) => {                       // grava o resultado da gerência (não grava em simulação nem em teste)
+        if (!gravar) return;
+        salvarEnvios(ctrl, [Object.assign({ gkey: g.gkey, data: g.data, mun: g.municipio, tipo: g.tipo, oficina: g.oficina, ger, n: null, enviado_em: null, tipo_envio: origem, motivo: '', pdf: '', docx: '' }, campos)]);
+      };
+      let esgotou = false;
       agrupar(dodia.filter(a => a.revisar)).forEach(g => {
-        res.itens.push({ municipio: g.municipio, decisao: 'ignorada', motivo: 'Em revisão (confirme na aba Revisão)' });
+        res.itens.push({ municipio: rotulo(g), decisao: 'ignorada', motivo: 'Em revisão (confirme na aba Revisão)' });
         if (!simular) g.linhas.forEach(a => { a.motivo = 'Aguardando revisão'; });
       });
-      agrupar(dodia.filter(a => !a.revisar)).forEach(g => {
-        const it = { municipio: g.municipio, modalidades: g.modalidades };
-        res.itens.push(it);
-        if (g.status === ENVIADO) { it.decisao = 'ja_enviada'; it.motivo = 'Já enviada'; return; }
-        if (g.nao_auto) { it.decisao = 'ignorada'; it.motivo = 'Marcada como "Não enviar automático"'; return; }
-        const s = selecionarRespostas(respostas, g.municipio, g.data, datasCad[norm(g.municipio)], inc, cfg.CAMPO_DATA_BUSCA);
-        const total = s.exatas.length + s.segs.length;
-        if (!total) {
-          it.decisao = 'sem_avaliacoes'; it.motivo = 'Nenhuma avaliação recebida';
-          marcar(g, { status: SEM_AVALIACOES, n: 0, enviado_em: new Date(), tipo_envio: origem, motivo: '' });
-          return;
-        }
-        const em = emailsDasGerencias(ctrl, g.gerencias);
-        if (!em.emails.length) {
-          it.decisao = 'nao_enviada'; it.motivo = 'Nenhuma gerência com e-mail válido. ' + em.avisos.join(' ');
-          marcar(g, { motivo: 'Não enviado: ' + it.motivo });
-          return;
-        }
-        it.total = total;
-        if (simular) { it.decisao = 'enviaria'; it.motivo = `${total} avaliação(ões); CCO: ${em.emails.length} e-mail(s)`; return; }
-        try {
-          const prep = prepararEnvio(ctrl, respostas, [{ municipio: g.municipio, data: g.data }], inc, false);
-          const m = { para: cfg.EMAIL_PARA, cco: em.emails.join(','), assunto: prep.assunto, corpo: prep.corpo, pdfId: prep.pdfId, nome: cfg.NOME_REMETENTE };
-          if (teste) {
-            m.para = cfg.EMAIL_TESTE || Session.getEffectiveUser().getEmail(); m.cco = ''; m.assunto = '[TESTE] ' + m.assunto;
-            m.corpo = `(Teste: em envio real iria para ${cfg.EMAIL_PARA} com CCO para ${em.emails.join(', ')})\n\n` + m.corpo;
+      const grupos = agrupar(dodia.filter(a => !a.revisar));
+      grupos.forEach(g => {
+        if (g.nao_auto) { res.itens.push({ municipio: rotulo(g), decisao: 'ignorada', motivo: 'Marcada como "Não enviar automático"' }); return; }
+        const r = respostasDoGrupo_(ctrl, respostas, g, inc);
+        estadoGerencias_(g, ctrl).forEach(e => {
+          const it = { municipio: rotulo(g, e.ger), modalidades: g.modalidades };
+          res.itens.push(it);
+          if (e.status === ENVIADO) { it.decisao = 'ja_enviada'; it.motivo = 'Já enviada'; return; }
+          const minhas = r.porGer[e.ger] || [];
+          if (!minhas.length) {
+            it.decisao = 'sem_avaliacoes'; it.motivo = 'Nenhuma avaliação atribuída a esta gerência';
+            registrar(g, e.ger, { status: SEM_AVALIACOES, n: 0, enviado_em: new Date() });
+            return;
           }
-          const r = enviarEmail_(cfg, m);
-          const obs = [r.nota, em.avisos.join(' ')].filter(Boolean).join(' ');
-          if (teste) {
-            it.decisao = 'teste'; it.motivo = `Teste enviado para ${m.para}`;
-            logs.push({ origem: 'Teste', municipio: g.municipio, datas: fmtData(g.data), n: total, destinatarios: 1, status: 'Teste', remetente: r.usado, link: prep.pdfUrl, obs });
-          } else {
-            it.decisao = 'enviada'; it.motivo = em.avisos.join(' ');
-            g.linhas.forEach(a => Object.assign(a, { status: ENVIADO, n: total, enviado_em: new Date(), tipo_envio: origem, motivo: '', link: prep.pdfUrl || '' }));
-            logs.push({ origem, municipio: g.municipio, datas: fmtData(g.data), n: total, destinatarios: em.emails.length + 1, status: ENVIADO, remetente: r.usado, link: prep.pdfUrl, obs });
+          const em = emailsDasGerencias(ctrl, [e.ger]);
+          if (!em.emails.length) {
+            it.decisao = 'nao_enviada'; it.motivo = 'Gerência sem e-mail válido. ' + em.avisos.join(' ');
+            registrar(g, e.ger, { status: NAO_ENVIADO, n: minhas.length, motivo: it.motivo });
+            return;
           }
-        } catch (e) {
-          it.decisao = 'falha'; it.motivo = 'Falha no envio: ' + e.message;
-          marcar(g, { motivo: 'Falha no envio automático: ' + e.message });
-          logs.push({ origem, municipio: g.municipio, datas: fmtData(g.data), status: 'Falha', obs: e.message });
-        }
+          it.total = minhas.length;
+          if (simular) { it.decisao = 'enviaria'; it.motivo = `${minhas.length} avaliação(ões); CCO: ${em.emails.length} e-mail(s)`; return; }
+          if (Date.now() - t0 > LIMITE_AUTO_MS) {
+            esgotou = true; it.decisao = 'nao_enviada'; it.motivo = 'Tempo da execução esgotado; use "Executar agora" para continuar.';
+            return;
+          }
+          try {
+            const prep = prepararEnvio(ctrl, respostas, g.gkey, e.ger, inc, false);
+            const m = { para: cfg.EMAIL_PARA, cco: em.emails.join(','), assunto: prep.assunto, corpo: prep.corpo, pdfId: prep.pdfId, nome: cfg.NOME_REMETENTE };
+            if (teste) {
+              m.para = cfg.EMAIL_TESTE || Session.getEffectiveUser().getEmail(); m.cco = ''; m.assunto = '[TESTE] ' + m.assunto;
+              m.corpo = `(Teste: em envio real iria para ${cfg.EMAIL_PARA} com CCO para ${em.emails.join(', ')})\n\n` + m.corpo;
+            }
+            const rr = enviarEmail_(cfg, m);
+            const obs = [rr.nota, em.avisos.join(' '), prep.avisos.filter(a => /Word|Modelo|modelo/.test(a)).join(' ')].filter(Boolean).join(' ');
+            const nomeLog = g.municipio + (g.tipo === 'Oficina' ? ' (Oficina: ' + g.oficina + ')' : '');
+            if (teste) {
+              it.decisao = 'teste'; it.motivo = `Teste enviado para ${m.para}`;
+              registrarLog([{ origem: 'Teste', municipio: nomeLog, datas: fmtData(g.data), n: minhas.length, destinatarios: 1, status: 'Teste', remetente: rr.usado, link: prep.pdfUrl, obs, ger: e.ger }]);
+            } else {
+              it.decisao = 'enviada'; it.motivo = em.avisos.join(' ');
+              registrar(g, e.ger, { status: ENVIADO, n: minhas.length, enviado_em: new Date(), pdf: prep.pdfUrl, docx: prep.docxUrl });
+              atualizarResumo_(ctrl, g.gkey, { n: prep.totalAtividade, link: prep.pastaUrl });
+              salvarAtividades(ctrl.atividades);                    // grava a cada envio: se o tempo acabar, o que já foi feito fica registrado
+              registrarLog([{ origem, municipio: nomeLog, datas: fmtData(g.data), n: minhas.length, destinatarios: em.emails.length + 1, status: ENVIADO, remetente: rr.usado, link: prep.pdfUrl, obs, ger: e.ger }]);
+            }
+          } catch (err) {
+            it.decisao = 'falha'; it.motivo = 'Falha no envio: ' + err.message;
+            registrar(g, e.ger, { status: NAO_ENVIADO, n: minhas.length, motivo: 'Falha no envio automático: ' + err.message });
+            registrarLog([{ origem, municipio: g.municipio, datas: fmtData(g.data), status: 'Falha', obs: err.message, ger: e.ger }]);
+          }
+        });
+        if (gravar) atualizarResumo_(ctrl, g.gkey);
       });
-      if (!simular) { salvarAtividades(ctrl.atividades); registrarLog(logs); }
+      if (esgotou) res.erros.push('O tempo da execução acabou antes de tratar todas as gerências. O que já foi enviado está registrado; use "Executar agora" para continuar.');
+      if (!simular) salvarAtividades(ctrl.atividades);
     }
     if (!simular) PropertiesService.getScriptProperties().setProperty('ULTIMA_EXEC', JSON.stringify(res));
     return res;
@@ -1404,9 +1673,10 @@ function apiSemana(semana, aceitar) {
       n_revisar: ctx.n_revisar, n_revisar_semana: ctx.n_revisar_semana, n_avisos: ctx.itens_revisao.length,
       respostasOk: ctx.respostas !== null,
       grupos: ctx.grupos.map(g => ({
-        gkey: g.gkey, municipio: g.municipio, data: g.data, dia: DIAS_SEMANA[diaSemana(g.data)], gerencias: g.gerencias, modalidades: g.modalidades,
-        status: g.status, enviado_em: dhCliente_(g.enviado_em), tipo_envio: g.tipo_envio, motivo: g.motivo, nao_auto: g.nao_auto,
-        exatas: g.exatas, seguinte: g.seguinte })),
+        gkey: g.gkey, tipo: g.tipo, oficina: g.oficina, municipio: g.municipio, data: g.data, dia: DIAS_SEMANA[diaSemana(g.data)],
+        modalidades: g.modalidades, nao_auto: g.nao_auto, total: g.total, pasta: g.pasta,
+        gerencias: g.est.map(e => ({ ger: e.ger, n: e.nAtual === undefined ? null : e.nAtual, status: e.status, enviado_em: dhCliente_(e.enviado_em),
+                                      tipo_envio: e.tipo_envio, motivo: e.motivo, pdf: e.pdf, docx: e.docx })) })),
     };
   });
 }
@@ -1417,7 +1687,7 @@ function apiRevisao() {
   return api_(() => {
     const ctrl = lerControle();
     const itens = ativas(ctrl).filter(a => a.revisar).sort((a, b) => cmp(a.data, b.data) || cmp(a.mun, b.mun))
-      .map(a => ({ chave: a.chave, data: a.data, mun: a.mun, modalidade: a.modalidade, ger: lista_(a.ger.replace(/\s+/g, ',')), obs: a.obs, origem: a.origem, proc: a.proc }));
+      .map(a => ({ chave: a.chave, data: a.data, mun: a.mun, modalidade: a.modalidade, tipo: a.tipo, oficina: a.oficina, ger: lista_(a.ger.replace(/\s+/g, ',')), obs: a.obs, origem: a.origem, proc: a.proc }));
     let av = { ini: null, itens: [] };
     try { av = JSON.parse(PropertiesService.getScriptProperties().getProperty('AVISOS_SEMANA') || 'null') || av; } catch (e) { /* sem avisos */ }
     return { itens, municipios: listaMunicipios(), gerencias: GERENCIAS_VALIDAS, modalidades: MODALIDADES,
@@ -1426,24 +1696,23 @@ function apiRevisao() {
   });
 }
 function apiConfirmar(f) {
-  return api_(() => { confirmarRevisao(f.chave, paraIso(f.data), f.municipio, f.modalidade, f.gerencias); return true; });
+  return api_(() => { confirmarRevisao(f.chave, paraIso(f.data), f.municipio, f.modalidade, f.gerencias, f.oficina); return true; });
 }
 
 // ---------------------------------------------------------------- envio manual
-function apiPreparar(gkeys, incluirSeguinte) {
+/** Prepara o envio de UMA gerência numa atividade (gkey = data|município[|oficina]). */
+function apiPreparar(gkey, ger, incluirSeguinte) {
   return api_(() => {
-    if (!gkeys || !gkeys.length) throw new ErroDados('Marque ao menos uma atividade.');
-    const sel = gkeys.map(k => { const i = k.indexOf('|'); return { data: k.slice(0, i), municipio: k.slice(i + 1) }; });
-    if (uniq(sel.map(s => norm(s.municipio))).length > 1) throw new ErroDados('Selecione atividades de um único município por vez (o relatório é por município).');
+    if (!gkey || !ger) throw new ErroDados('Escolha a atividade e a gerência.');
     const ctrl = lerControle(), respostas = carregarRespostas(ctrl.config).respostas;
     const inc = incluirSeguinte === undefined || incluirSeguinte === null ? simNao_(ctrl.config.INCLUIR_DIA_SEGUINTE) : !!incluirSeguinte;
-    return prepararEnvio(ctrl, respostas, sel, inc, false);
+    return prepararEnvio(ctrl, respostas, gkey, ger, inc, false);
   });
 }
 function apiRegerar(d, incluirSeguinte) {
   return api_(() => {
     const ctrl = lerControle(), respostas = carregarRespostas(ctrl.config).respostas;
-    const novo = prepararEnvio(ctrl, respostas, d.datas.map(x => ({ municipio: d.municipio, data: x })), !!incluirSeguinte, false);
+    const novo = prepararEnvio(ctrl, respostas, d.gkey, d.ger, !!incluirSeguinte, false);
     ['para', 'cc', 'cco'].forEach(k => { novo[k] = d[k]; });            // mantém o que foi editado
     if ((novo.total > 0) === (d.total > 0)) { novo.assunto = d.assunto; novo.corpo = d.corpo; }   // trocou relatório <-> aviso: usa o texto novo
     return novo;
