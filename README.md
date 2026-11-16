@@ -259,6 +259,7 @@ Como a Docs não informa a altura real do conteúdo, a paginação usa **estimat
 - Mostra a semana de **segunda a sexta** com o intervalo em destaque. Use **◀ / ▶**, o seletor de data, **Semana atual** e **↻ Atualizar**.
 - Cada **atividade** (ATM ou Oficina) é um **bloco**: data, município, modalidade (ou nome da oficina), **total de avaliações** (número único), link da pasta com PDF e Word e a opção **excluir do automático**.
 - Dentro do bloco há **uma linha por gerência participante**, com o nº de avaliações dela e o **status de envio**: *Enviado* (verde, com data, hora e tipo), *Sem avaliações* ou *Não enviado* (com o motivo), além dos links do PDF e do Word.
+- **Relatório geral** (última linha de cada atividade): reúne **todas as avaliações, sem dividir por gerência**, e lista **todas as gerências participantes** no relatório. O e-mail vai com os e-mails de todas elas em CCO. O envio geral é registrado à parte (linha "Todas as gerências" na aba Envios por gerência) e não altera o status das gerências individuais nem o envio automático.
 - **Preparar envio / Reenviar** (por gerência): gera o PDF e o Word, abre uma janela para você editar *Para, CC, CCO, assunto e mensagem*, conferir o PDF e **Enviar** (ou **Criar rascunho no Gmail**). O e-mail leva só o PDF; se editar o Word, anexe-o manualmente (rascunho do Gmail).
 
 ### Aba Revisão

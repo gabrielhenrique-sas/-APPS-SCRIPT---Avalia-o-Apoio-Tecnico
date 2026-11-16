@@ -488,6 +488,8 @@ function partesGkey_(k) {
   const p = String(k).split('|');
   return { data: p[0], municipio: p[1], oficina: p.slice(2).join('|') };
 }
+/** Valor especial de "gerência" para o relatório geral: todas as avaliações da atividade, sem dividir por gerência. */
+const GER_TODAS = 'TODAS';
 const normGer_ = g => { const t = String(g || '').trim().toUpperCase(); return APELIDOS_GER[t] || t; };
 
 // ---- aba "Unidades x Gerências": de qual gerência é cada Unidade/Setor do formulário (pode ser editada na planilha)
@@ -1277,6 +1279,7 @@ function carregarSemana(ini, aceitar) {
         r.semUnidade.forEach(u => { semUnidade[u] = true; });
       }
       g.est = est;
+      g.geral = ctrl.envios[envioChave_(g.gkey, GER_TODAS)] || null;     // envio do relatório geral (todas as gerências), se houver
     });
     ctx.semUnidade = Object.keys(semUnidade);
     ctx.itens_revisao = avisosDaSemana(cfg, ctrl, ctx);
@@ -1363,6 +1366,7 @@ function definirNaoAuto(gkeys, valor) {
 /** extra: {ger, oficina}. Marcadores: {{MUNICIPIO}}, {{DATA}}, {{GERENCIA}}, {{OFICINA}}. */
 function preencher_(modelo, municipio, datas, extra) {
   extra = extra || {};
+  if (extra.plural) modelo = modelo.replace(/à gerência \{\{GERENCIA\}\}/g, 'às gerências {{GERENCIA}}').replace(/a gerência \{\{GERENCIA\}\}/g, 'as gerências {{GERENCIA}}');
   return modelo.replace(/\{\{MUNICIPIO\}\}/g, municipio).replace(/\{\{DATA\}\}/g, textoDatas(datas))
     .replace(/\{\{GERENCIA\}\}/g, extra.ger || '').replace(/\{\{OFICINA\}\}/g, extra.oficina || '');
 }
@@ -1394,35 +1398,40 @@ function salvarArquivo_(pasta, blob) {
   return { id: f.getId(), url: f.getUrl() };
 }
 function nomeArquivo_(g, ger) {
-  return 'Relatorio_' + (g.tipo === 'Oficina' ? 'Oficina_' + slug(g.oficina).slice(0, 40) + '_' : '') + slug(g.municipio) + '_' + g.data + '_' + ger;
+  return 'Relatorio_' + (g.tipo === 'Oficina' ? 'Oficina_' + slug(g.oficina).slice(0, 40) + '_' : '') + slug(g.municipio) + '_' + g.data + '_' + (ger === GER_TODAS ? 'Geral' : ger);
 }
 
-/** Calcula as avaliações de UMA gerência numa atividade e gera o PDF e o Word dela (sem enviar). gkey: data|município[|oficina]. */
+/**
+ * Calcula as avaliações de UMA gerência numa atividade e gera o PDF e o Word dela (sem enviar). gkey: data|município[|oficina].
+ * Com ger = GER_TODAS gera o relatório geral: todas as avaliações da atividade, sem dividir por gerência, listando todas as participantes.
+ */
 function prepararEnvio(ctrl, respostas, gkey, ger, incluirSeguinte, semPdf) {
   const cfg = ctrl.config;
   const g = agrupar(ativas(ctrl).filter(a => !a.revisar && gkeyDe_(a) === gkey))[0];
   if (!g) throw new ErroDados('Atividade não encontrada. Recarregue a página da semana.');
-  if (g.gerencias.indexOf(ger) < 0) throw new ErroDados(`A gerência ${ger} não participa desta atividade.`);
-  const r = respostasDoGrupo_(ctrl, respostas, g, incluirSeguinte), minhas = r.porGer[ger];
+  const geral = ger === GER_TODAS;
+  if (!geral && g.gerencias.indexOf(ger) < 0) throw new ErroDados(`A gerência ${ger} não participa desta atividade.`);
+  const r = respostasDoGrupo_(ctrl, respostas, g, incluirSeguinte), minhas = geral ? r.todas : r.porGer[ger];
+  const gersRel = geral ? g.gerencias : [ger];                   // gerências que constam no relatório e que recebem o e-mail
   const ctxR = { tipo: g.tipo, oficina: g.oficina }, oficina = g.tipo === 'Oficina';
-  const em = emailsDasGerencias(ctrl, [ger]);
+  const em = emailsDasGerencias(ctrl, gersRel);
   let pdf = null, docx = null, pastaUrl = '';
   const avisosPdf = [];
   if (minhas.length && !semPdf) {
-    const gr = gerarPdfRelatorio(cfg, nomeArquivo_(g, ger), g.municipio, [{ data: g.data, respostas: minhas, modalidades: g.modalidades }], [ger], ctxR);
+    const gr = gerarPdfRelatorio(cfg, nomeArquivo_(g, ger), g.municipio, [{ data: g.data, respostas: minhas, modalidades: g.modalidades }], gersRel, ctxR);
     if (gr.aviso) avisosPdf.push(gr.aviso);
     const pa = pastaAtividade_(g);
     pdf = salvarArquivo_(pa.pasta, gr.blob);
     if (gr.docx) docx = salvarArquivo_(pa.pasta, gr.docx);
     pastaUrl = pa.url;
   }
-  const conta = Session.getEffectiveUser().getEmail(), extra = { ger, oficina: g.oficina };
+  const conta = Session.getEffectiveUser().getEmail(), extra = { ger: gersRel.join(', '), oficina: g.oficina, plural: gersRel.length > 1 };
   const modelos = minhas.length
     ? (oficina ? [cfg.ASSUNTO_RELATORIO_OFICINA || ASSUNTO_OFICINA_PADRAO, cfg.CORPO_RELATORIO_OFICINA || CORPO_OFICINA_PADRAO]
                : [cfg.ASSUNTO_RELATORIO || ASSUNTO_RELATORIO_PADRAO, cfg.CORPO_RELATORIO || CORPO_RELATORIO_PADRAO])
     : (oficina ? [ASSUNTO_SEM_OFICINA, CORPO_SEM_OFICINA] : [cfg.ASSUNTO_SEM_RESPOSTAS || ASSUNTO_SEM_PADRAO, cfg.CORPO_SEM_RESPOSTAS || CORPO_SEM_PADRAO]);
   return {
-    gkey, ger, tipo: g.tipo, oficina: g.oficina, municipio: g.municipio, data: g.data, datas: [g.data], gerencias: [ger], modalidades: g.modalidades,
+    gkey, ger, geral, tipo: g.tipo, oficina: g.oficina, municipio: g.municipio, data: g.data, datas: [g.data], gerencias: gersRel, modalidades: g.modalidades,
     incluirSeguinte, total: minhas.length, totalAtividade: r.todas.length,
     pdfId: pdf ? pdf.id : '', pdfUrl: pdf ? pdf.url : '', docxUrl: docx ? docx.url : '', pastaUrl, avisos: em.avisos.concat(avisosPdf),
     remetente: cfg.REMETENTE || conta, nome: cfg.NOME_REMETENTE || 'NATM', para: cfg.EMAIL_PARA || conta, cc: '', cco: em.emails.join(', '),
@@ -1453,7 +1462,7 @@ function registrarEnvio_(ctrl, prep, tipo, nDest, usado, nota) {
   atualizarResumo_(ctrl, prep.gkey, { n: prep.totalAtividade, link: prep.pastaUrl });
   salvarAtividades(ctrl.atividades);
   registrarLog([{ origem: tipo, municipio: prep.municipio + (prep.tipo === 'Oficina' ? ' (Oficina: ' + prep.oficina + ')' : ''), datas: fmtData(prep.data), n: prep.total,
-                  destinatarios: nDest, status: ENVIADO, remetente: usado, link: prep.pdfUrl, obs: nota, ger: prep.ger }]);
+                  destinatarios: nDest, status: ENVIADO, remetente: usado, link: prep.pdfUrl, obs: nota, ger: prep.ger === GER_TODAS ? 'Todas (relatório geral)' : prep.ger }]);
 }
 
 /** Envio manual: 'd' é o rascunho (editado na tela). */
@@ -1675,6 +1684,7 @@ function apiSemana(semana, aceitar) {
       grupos: ctx.grupos.map(g => ({
         gkey: g.gkey, tipo: g.tipo, oficina: g.oficina, municipio: g.municipio, data: g.data, dia: DIAS_SEMANA[diaSemana(g.data)],
         modalidades: g.modalidades, nao_auto: g.nao_auto, total: g.total, pasta: g.pasta,
+        geral: g.geral ? { status: g.geral.status, enviado_em: dhCliente_(g.geral.enviado_em), tipo_envio: g.geral.tipo_envio, n: g.geral.n, pdf: g.geral.pdf, docx: g.geral.docx } : null,
         gerencias: g.est.map(e => ({ ger: e.ger, n: e.nAtual === undefined ? null : e.nAtual, status: e.status, enviado_em: dhCliente_(e.enviado_em),
                                       tipo_envio: e.tipo_envio, motivo: e.motivo, pdf: e.pdf, docx: e.docx })) })),
     };
